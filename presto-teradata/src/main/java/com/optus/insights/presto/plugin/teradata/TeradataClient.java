@@ -13,6 +13,15 @@
  */
 package com.optus.insights.presto.plugin.teradata;
 
+import static java.util.Locale.ENGLISH;
+
+import java.sql.Connection;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.Set;
+
+import javax.inject.Inject;
+
 import com.facebook.presto.plugin.jdbc.BaseJdbcClient;
 import com.facebook.presto.plugin.jdbc.BaseJdbcConfig;
 import com.facebook.presto.plugin.jdbc.JdbcConnectorId;
@@ -21,15 +30,6 @@ import com.facebook.presto.spi.type.Type;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableSet;
 import com.teradata.jdbc.TeraDriver;
-
-import javax.inject.Inject;
-
-import java.sql.Connection;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.util.Set;
-
-import static java.util.Locale.ENGLISH;
 
 public class TeradataClient
         extends BaseJdbcClient

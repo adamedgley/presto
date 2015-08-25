@@ -17,6 +17,13 @@ Presto is a standard Maven project. Simply run the following command from the pr
 
     mvn clean install
 
+To include the Teradata connectors, you must first download the drivers from https://downloads.teradata.com/download/connectivity/jdbc-driver. Unzip
+these and run the following commands:
+   mvn install:install-file -DgroupId=com.teradata.jdbc -DartifactId=tdgssconfig -Dversion=15.10.00.07 -Dpackaging=jar -Dfile=/path/to/tdgssconfig.jar
+   mvn install:install-file -DgroupId=com.teradata.jdbc -DartifactId=terajdbc4 -Dversion=15.10.00.07 -Dpackaging=jar -Dfile=/path/to/terajdbc4.jar
+
+
+
 On the first build, Maven will download all the dependencies from the internet and cache them in the local repository (`~/.m2/repository`), which can take a considerable amount of time. Subsequent builds will be faster.
 
 Presto has a comprehensive set of unit tests that can take several minutes to run. You can disable the tests when building:

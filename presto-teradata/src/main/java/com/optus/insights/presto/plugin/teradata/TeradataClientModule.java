@@ -13,13 +13,13 @@
  */
 package com.optus.insights.presto.plugin.teradata;
 
+import static io.airlift.configuration.ConfigBinder.configBinder;
+
 import com.facebook.presto.plugin.jdbc.BaseJdbcConfig;
 import com.facebook.presto.plugin.jdbc.JdbcClient;
 import com.google.inject.Binder;
 import com.google.inject.Module;
 import com.google.inject.Scopes;
-
-import static io.airlift.configuration.ConfigBinder.configBinder;
 
 public class TeradataClientModule
         implements Module
