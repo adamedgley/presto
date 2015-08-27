@@ -25,8 +25,6 @@ import javax.inject.Inject;
 import com.facebook.presto.plugin.jdbc.BaseJdbcClient;
 import com.facebook.presto.plugin.jdbc.BaseJdbcConfig;
 import com.facebook.presto.plugin.jdbc.JdbcConnectorId;
-import com.facebook.presto.spi.SchemaTableName;
-import com.facebook.presto.spi.type.Type;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableSet;
 import com.teradata.jdbc.TeraDriver;
@@ -38,7 +36,7 @@ public class TeradataClient
     public TeradataClient(JdbcConnectorId connectorId, BaseJdbcConfig config, TeradataConfig teradataConfig)
             throws SQLException
     {
-        super(connectorId, config, "`", new TeraDriver());
+        super(connectorId, config, "\"", new TeraDriver());
         connectionProperties.setProperty("nullCatalogMeansCurrent", "false");
         if (teradataConfig.isAutoReconnect()) {
             connectionProperties.setProperty("autoReconnect", String.valueOf(teradataConfig.isAutoReconnect()));
@@ -67,12 +65,13 @@ public class TeradataClient
         }
     }
 
+/*
     @Override
     protected ResultSet getTables(Connection connection, String schemaName, String tableName)
             throws SQLException
     {
         // MySQL maps their "database" to SQL catalogs and does not have schemas
-        return connection.getMetaData().getTables(schemaName, null, tableName, null);
+        return connection.getMetaData().getTables(null, schemaName, tableName, null);
     }
 
     @Override
@@ -91,16 +90,9 @@ public class TeradataClient
     {
         String sqlType = super.toSqlType(type);
         switch (sqlType) {
-            case "varchar":
-                return "mediumtext";
             case "varbinary":
-                return "mediumblob";
-            case "time with timezone":
-                return "time";
-            case "timestamp":
-            case "timestamp with timezone":
-                return "datetime";
+                return "blob";
         }
         return sqlType;
-    }
+    }*/
 }
