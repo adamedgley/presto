@@ -14,11 +14,13 @@
 package com.facebook.presto.execution;
 
 import com.facebook.presto.metadata.MetadataManager;
+import com.facebook.presto.security.AllowAllAccessControl;
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.FunctionCall;
 import com.facebook.presto.sql.tree.QualifiedName;
 import com.facebook.presto.sql.tree.SetSession;
 import com.facebook.presto.sql.tree.StringLiteral;
+import com.facebook.presto.transaction.TransactionManager;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import org.testng.annotations.AfterClass;
@@ -30,6 +32,7 @@ import java.util.concurrent.ExecutorService;
 
 import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
 import static com.facebook.presto.spi.session.PropertyMetadata.stringSessionProperty;
+import static com.facebook.presto.transaction.TransactionManager.createTestTransactionManager;
 import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static java.util.concurrent.Executors.newCachedThreadPool;
 import static org.testng.Assert.assertEquals;
@@ -74,8 +77,9 @@ public class TestSetSessionTask
     private void testSetSession(Expression expression, String expectedValue)
             throws Exception
     {
-        QueryStateMachine stateMachine = new QueryStateMachine(new QueryId("query"), "set foo.bar = 'baz'", TEST_SESSION, URI.create("fake://uri"), executor);
-        new SetSessionTask().execute(new SetSession(QualifiedName.of("foo", "bar"), expression), TEST_SESSION, metadata, stateMachine);
+        TransactionManager transactionManager = createTestTransactionManager();
+        QueryStateMachine stateMachine = QueryStateMachine.begin(new QueryId("query"), "set foo.bar = 'baz'", TEST_SESSION, URI.create("fake://uri"), false, transactionManager, executor);
+        new SetSessionTask().execute(new SetSession(QualifiedName.of("foo", "bar"), expression), transactionManager, metadata, new AllowAllAccessControl(), stateMachine).join();
 
         Map<String, String> sessionProperties = stateMachine.getSetSessionProperties();
         assertEquals(sessionProperties, ImmutableMap.of("foo.bar", expectedValue));

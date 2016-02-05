@@ -13,10 +13,11 @@
  */
 package com.facebook.presto.kafka;
 
-import com.facebook.presto.spi.Connector;
-import com.facebook.presto.spi.ConnectorFactory;
+import com.facebook.presto.spi.ConnectorHandleResolver;
 import com.facebook.presto.spi.NodeManager;
 import com.facebook.presto.spi.SchemaTableName;
+import com.facebook.presto.spi.connector.Connector;
+import com.facebook.presto.spi.connector.ConnectorFactory;
 import com.facebook.presto.spi.type.TypeManager;
 import com.google.common.base.Throwables;
 import com.google.inject.Injector;
@@ -29,7 +30,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.function.Supplier;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 /**
  * Creates Kafka Connectors based off connectorId and specific configuration.
@@ -47,10 +48,10 @@ public class KafkaConnectorFactory
             Optional<Supplier<Map<SchemaTableName, KafkaTopicDescription>>> tableDescriptionSupplier,
             Map<String, String> optionalConfig)
     {
-        this.typeManager = checkNotNull(typeManager, "typeManager is null");
-        this.nodeManager = checkNotNull(nodeManager, "nodeManager is null");
-        this.optionalConfig = checkNotNull(optionalConfig, "optionalConfig is null");
-        this.tableDescriptionSupplier = checkNotNull(tableDescriptionSupplier, "tableDescriptionSupplier is null");
+        this.typeManager = requireNonNull(typeManager, "typeManager is null");
+        this.nodeManager = requireNonNull(nodeManager, "nodeManager is null");
+        this.optionalConfig = requireNonNull(optionalConfig, "optionalConfig is null");
+        this.tableDescriptionSupplier = requireNonNull(tableDescriptionSupplier, "tableDescriptionSupplier is null");
     }
 
     @Override
@@ -60,10 +61,16 @@ public class KafkaConnectorFactory
     }
 
     @Override
+    public ConnectorHandleResolver getHandleResolver()
+    {
+        return new KafkaHandleResolver();
+    }
+
+    @Override
     public Connector create(String connectorId, Map<String, String> config)
     {
-        checkNotNull(connectorId, "connectorId is null");
-        checkNotNull(config, "config is null");
+        requireNonNull(connectorId, "connectorId is null");
+        requireNonNull(config, "config is null");
 
         try {
             Bootstrap app = new Bootstrap(

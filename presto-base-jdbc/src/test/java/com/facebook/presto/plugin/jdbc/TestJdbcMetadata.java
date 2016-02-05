@@ -108,6 +108,14 @@ public class TestJdbcMetadata
                 new ColumnMetadata("text", VARCHAR, false),
                 new ColumnMetadata("value", BIGINT, false)));
 
+        // escaping name patterns
+        JdbcTableHandle specialTableHandle = metadata.getTableHandle(SESSION, new SchemaTableName("exa_ple", "num_ers"));
+        ConnectorTableMetadata specialTableMetadata = metadata.getTableMetadata(SESSION, specialTableHandle);
+        assertEquals(specialTableMetadata.getTable(), new SchemaTableName("exa_ple", "num_ers"));
+        assertEquals(specialTableMetadata.getColumns(), ImmutableList.of(
+                new ColumnMetadata("te_t", VARCHAR, false),
+                new ColumnMetadata("va%ue", BIGINT, false)));
+
         // unknown tables should produce null
         unknownTableMetadata(new JdbcTableHandle(CONNECTOR_ID, new SchemaTableName("u", "numbers"), null, "unknown", "unknown"));
         unknownTableMetadata(new JdbcTableHandle(CONNECTOR_ID, new SchemaTableName("example", "numbers"), null, "example", "unknown"));
@@ -130,15 +138,22 @@ public class TestJdbcMetadata
         // all schemas
         assertEquals(ImmutableSet.copyOf(metadata.listTables(SESSION, null)), ImmutableSet.of(
                 new SchemaTableName("example", "numbers"),
+                new SchemaTableName("example", "view_source"),
+                new SchemaTableName("example", "view"),
                 new SchemaTableName("tpch", "orders"),
-                new SchemaTableName("tpch", "lineitem")));
+                new SchemaTableName("tpch", "lineitem"),
+                new SchemaTableName("exa_ple", "num_ers")));
 
         // specific schema
         assertEquals(ImmutableSet.copyOf(metadata.listTables(SESSION, "example")), ImmutableSet.of(
-                new SchemaTableName("example", "numbers")));
+                new SchemaTableName("example", "numbers"),
+                new SchemaTableName("example", "view_source"),
+                new SchemaTableName("example", "view")));
         assertEquals(ImmutableSet.copyOf(metadata.listTables(SESSION, "tpch")), ImmutableSet.of(
                 new SchemaTableName("tpch", "orders"),
                 new SchemaTableName("tpch", "lineitem")));
+        assertEquals(ImmutableSet.copyOf(metadata.listTables(SESSION, "exa_ple")), ImmutableSet.of(
+                new SchemaTableName("exa_ple", "num_ers")));
 
         // unknown schema
         assertEquals(ImmutableSet.copyOf(metadata.listTables(SESSION, "unknown")), ImmutableSet.of());

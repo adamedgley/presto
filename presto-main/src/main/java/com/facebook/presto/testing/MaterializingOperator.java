@@ -19,12 +19,13 @@ import com.facebook.presto.operator.OperatorContext;
 import com.facebook.presto.operator.OperatorFactory;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.google.common.collect.ImmutableList;
 
 import java.util.List;
 
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
+import static java.util.Objects.requireNonNull;
 
 public class MaterializingOperator
         implements Operator
@@ -33,12 +34,14 @@ public class MaterializingOperator
             implements OperatorFactory
     {
         private final int operatorId;
+        private final PlanNodeId planNodeId;
         private final List<Type> sourceTypes;
         private boolean closed;
 
-        public MaterializingOperatorFactory(int operatorId, List<Type> sourceTypes)
+        public MaterializingOperatorFactory(int operatorId, PlanNodeId planNodeId, List<Type> sourceTypes)
         {
             this.operatorId = operatorId;
+            this.planNodeId = requireNonNull(planNodeId, "planNodeId is null");
             this.sourceTypes = sourceTypes;
         }
 
@@ -52,7 +55,7 @@ public class MaterializingOperator
         public MaterializingOperator createOperator(DriverContext driverContext)
         {
             checkState(!closed, "Factory is already closed");
-            OperatorContext operatorContext = driverContext.addOperatorContext(operatorId, MaterializingOperator.class.getSimpleName());
+            OperatorContext operatorContext = driverContext.addOperatorContext(operatorId, planNodeId, MaterializingOperator.class.getSimpleName());
             return new MaterializingOperator(operatorContext, sourceTypes);
         }
 
@@ -60,6 +63,12 @@ public class MaterializingOperator
         public void close()
         {
             closed = true;
+        }
+
+        @Override
+        public OperatorFactory duplicate()
+        {
+            return new MaterializingOperatorFactory(operatorId, planNodeId, sourceTypes);
         }
     }
 
@@ -70,8 +79,14 @@ public class MaterializingOperator
 
     public MaterializingOperator(OperatorContext operatorContext, List<Type> sourceTypes)
     {
-        this.operatorContext = checkNotNull(operatorContext, "operatorContext is null");
+        this.operatorContext = requireNonNull(operatorContext, "operatorContext is null");
         resultBuilder = MaterializedResult.resultBuilder(operatorContext.getSession(), sourceTypes);
+    }
+
+    public MaterializingOperator(OperatorContext operatorContext, MaterializedResult.Builder resultBuilder)
+    {
+        this.operatorContext = requireNonNull(operatorContext, "operatorContext is null");
+        this.resultBuilder = requireNonNull(resultBuilder, "resultBuilder is null");
     }
 
     public boolean isClosed()
@@ -117,7 +132,7 @@ public class MaterializingOperator
     @Override
     public void addInput(Page page)
     {
-        checkNotNull(page, "page is null");
+        requireNonNull(page, "page is null");
         checkState(!finished, "operator finished");
 
         resultBuilder.page(page);

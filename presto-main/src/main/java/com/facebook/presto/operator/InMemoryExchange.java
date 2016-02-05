@@ -15,6 +15,7 @@ package com.facebook.presto.operator;
 
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.google.common.collect.ImmutableList;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.SettableFuture;
@@ -29,9 +30,9 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 
 import static com.facebook.presto.operator.Operator.NOT_BLOCKED;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
+import static java.util.Objects.requireNonNull;
 
 @ThreadSafe
 public class InMemoryExchange
@@ -74,7 +75,7 @@ public class InMemoryExchange
 
     public InMemoryExchange(List<Type> types, int bufferCount, DataSize maxBufferedBytes)
     {
-        this.types = ImmutableList.copyOf(checkNotNull(types, "types is null"));
+        this.types = ImmutableList.copyOf(requireNonNull(types, "types is null"));
 
         ImmutableList.Builder<Queue<PageReference>> buffers = ImmutableList.builder();
         for (int i = 0; i < bufferCount; i++) {
@@ -96,10 +97,11 @@ public class InMemoryExchange
         return buffers.size();
     }
 
-    public synchronized OperatorFactory createSinkFactory(int operatorId)
+    public synchronized OperatorFactory createSinkFactory(int operatorId, PlanNodeId planNodeId)
     {
+        checkState(!noMoreSinkFactories, "No more sink factories already set");
         sinkFactories++;
-        return new InMemoryExchangeSinkOperatorFactory(operatorId);
+        return new InMemoryExchangeSinkOperatorFactory(operatorId, planNodeId);
     }
 
     private synchronized void addSink()
@@ -115,7 +117,7 @@ public class InMemoryExchange
         updateState();
     }
 
-    public synchronized void noMoreSinkFactories()
+    private synchronized void noMoreSinkFactories()
     {
         this.noMoreSinkFactories = true;
         updateState();
@@ -246,14 +248,16 @@ public class InMemoryExchange
     }
 
     private class InMemoryExchangeSinkOperatorFactory
-            implements OperatorFactory
+            implements OperatorFactory, LocalPlannerAware
     {
         private final int operatorId;
+        private final PlanNodeId planNodeId;
         private boolean closed;
 
-        private InMemoryExchangeSinkOperatorFactory(int operatorId)
+        private InMemoryExchangeSinkOperatorFactory(int operatorId, PlanNodeId planNodeId)
         {
             this.operatorId = operatorId;
+            this.planNodeId = requireNonNull(planNodeId, "planNodeId is null");
         }
 
         @Override
@@ -266,7 +270,7 @@ public class InMemoryExchange
         public Operator createOperator(DriverContext driverContext)
         {
             checkState(!closed, "Factory is already closed");
-            OperatorContext operatorContext = driverContext.addOperatorContext(operatorId, InMemoryExchangeSinkOperator.class.getSimpleName());
+            OperatorContext operatorContext = driverContext.addOperatorContext(operatorId, planNodeId, InMemoryExchangeSinkOperator.class.getSimpleName());
             addSink();
             return new InMemoryExchangeSinkOperator(operatorContext, InMemoryExchange.this);
         }
@@ -278,6 +282,18 @@ public class InMemoryExchange
                 closed = true;
                 sinkFactoryClosed();
             }
+        }
+
+        @Override
+        public OperatorFactory duplicate()
+        {
+            return createSinkFactory(operatorId, planNodeId);
+        }
+
+        @Override
+        public void localPlannerComplete()
+        {
+            noMoreSinkFactories();
         }
     }
 }

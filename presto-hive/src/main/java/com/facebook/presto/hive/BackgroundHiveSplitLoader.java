@@ -18,7 +18,7 @@ import com.facebook.presto.hive.util.ResumableTask;
 import com.facebook.presto.hive.util.ResumableTasks;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.HostAddress;
-import com.facebook.presto.spi.TupleDomain;
+import com.facebook.presto.spi.predicate.TupleDomain;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 import io.airlift.units.DataSize;
@@ -59,7 +59,6 @@ import static com.facebook.presto.hadoop.HadoopFileStatus.isFile;
 import static com.facebook.presto.hive.HiveBucketing.HiveBucket;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_INVALID_METADATA;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_INVALID_PARTITION_VALUE;
-import static com.facebook.presto.hive.HiveType.getSupportedHiveType;
 import static com.facebook.presto.hive.HiveUtil.checkCondition;
 import static com.facebook.presto.hive.HiveUtil.getInputFormat;
 import static com.facebook.presto.hive.HiveUtil.isSplittable;
@@ -382,9 +381,11 @@ public class BackgroundHiveSplitLoader
                 List<HostAddress> addresses = toHostAddress(blockLocation.getHosts());
 
                 long maxBytes = maxSplitSize.toBytes();
+                boolean creatingInitialSplits = false;
 
                 if (remainingInitialSplits.get() > 0) {
                     maxBytes = maxInitialSplitSize.toBytes();
+                    creatingInitialSplits = true;
                 }
 
                 // divide the block into uniform chunks that are smaller than the max split size
@@ -394,6 +395,14 @@ public class BackgroundHiveSplitLoader
 
                 long chunkOffset = 0;
                 while (chunkOffset < blockLocation.getLength()) {
+                    if (remainingInitialSplits.decrementAndGet() < 0 && creatingInitialSplits) {
+                        creatingInitialSplits = false;
+                        // recalculate the target chunk size
+                        maxBytes = maxSplitSize.toBytes();
+                        long remainingLength = blockLocation.getLength() - chunkOffset;
+                        chunks = Math.max(1, (int) (remainingLength / maxBytes));
+                        targetChunkSize = (long) Math.ceil(remainingLength * 1.0 / chunks);
+                    }
                     // adjust the actual chunk size to account for the overrun when chunks are slightly bigger than necessary (see above)
                     long chunkLength = Math.min(targetChunkSize, blockLocation.getLength() - chunkOffset);
 
@@ -411,7 +420,6 @@ public class BackgroundHiveSplitLoader
                             effectivePredicate));
 
                     chunkOffset += chunkLength;
-                    remainingInitialSplits.decrementAndGet();
                 }
                 checkState(chunkOffset == blockLocation.getLength(), "Error splitting blocks");
             }
@@ -459,7 +467,7 @@ public class BackgroundHiveSplitLoader
         checkCondition(keys.size() == values.size(), HIVE_INVALID_METADATA, "Expected %s partition key values, but got %s", keys.size(), values.size());
         for (int i = 0; i < keys.size(); i++) {
             String name = keys.get(i).getName();
-            HiveType hiveType = getSupportedHiveType(keys.get(i).getType());
+            HiveType hiveType = HiveType.valueOf(keys.get(i).getType());
             String value = values.get(i);
             checkCondition(value != null, HIVE_INVALID_PARTITION_VALUE, "partition key value cannot be null for field: %s", name);
             partitionKeys.add(new HivePartitionKey(name, hiveType, value));

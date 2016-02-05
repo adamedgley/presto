@@ -16,17 +16,17 @@ package com.facebook.presto.operator;
 import com.facebook.presto.ExceededMemoryLimitException;
 import com.facebook.presto.RowPagesBuilder;
 import com.facebook.presto.metadata.MetadataManager;
+import com.facebook.presto.metadata.Signature;
 import com.facebook.presto.operator.HashAggregationOperator.HashAggregationOperatorFactory;
 import com.facebook.presto.operator.aggregation.InternalAggregationFunction;
 import com.facebook.presto.spi.Page;
-import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.BlockBuilderStatus;
 import com.facebook.presto.spi.block.PageBuilderStatus;
 import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.planner.plan.AggregationNode.Step;
-import com.facebook.presto.sql.tree.QualifiedName;
+import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.facebook.presto.testing.MaterializedResult;
 import com.google.common.collect.ImmutableList;
 import com.google.common.primitives.Ints;
@@ -46,6 +46,7 @@ import java.util.concurrent.ExecutorService;
 
 import static com.facebook.presto.RowPagesBuilder.rowPagesBuilder;
 import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
+import static com.facebook.presto.metadata.FunctionKind.AGGREGATE;
 import static com.facebook.presto.operator.OperatorAssertion.assertOperatorEqualsIgnoreOrder;
 import static com.facebook.presto.operator.OperatorAssertion.dropChannel;
 import static com.facebook.presto.operator.OperatorAssertion.toMaterializedResult;
@@ -58,7 +59,6 @@ import static com.facebook.presto.spi.block.BlockBuilderStatus.DEFAULT_MAX_BLOCK
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
-import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.testing.MaterializedResult.resultBuilder;
 import static com.facebook.presto.testing.TestingTaskContext.createTaskContext;
@@ -104,9 +104,9 @@ public class TestHashAggregationOperator
             throws Exception
     {
         MetadataManager metadata = MetadataManager.createTestMetadataManager();
-        InternalAggregationFunction countVarcharColumn = metadata.resolveFunction(QualifiedName.of("count"), ImmutableList.of(parseTypeSignature(StandardTypes.VARCHAR)), false).getAggregationFunction();
-        InternalAggregationFunction countBooleanColumn = metadata.resolveFunction(QualifiedName.of("count"), ImmutableList.of(parseTypeSignature(StandardTypes.BOOLEAN)), false).getAggregationFunction();
-        InternalAggregationFunction maxVarcharColumn = metadata.resolveFunction(QualifiedName.of("max"), ImmutableList.of(parseTypeSignature(StandardTypes.VARCHAR)), false).getAggregationFunction();
+        InternalAggregationFunction countVarcharColumn = metadata.getFunctionRegistry().getAggregateFunctionImplementation(new Signature("count", AGGREGATE, StandardTypes.BIGINT, StandardTypes.VARCHAR));
+        InternalAggregationFunction countBooleanColumn = metadata.getFunctionRegistry().getAggregateFunctionImplementation(new Signature("count", AGGREGATE, StandardTypes.BIGINT, StandardTypes.BOOLEAN));
+        InternalAggregationFunction maxVarcharColumn = metadata.getFunctionRegistry().getAggregateFunctionImplementation(new Signature("max", AGGREGATE, StandardTypes.VARCHAR, StandardTypes.VARCHAR));
         List<Integer> hashChannels = Ints.asList(1);
         RowPagesBuilder rowPagesBuilder = rowPagesBuilder(hashEnabled, hashChannels, VARCHAR, VARCHAR, VARCHAR, BIGINT, BOOLEAN);
         List<Page> input = rowPagesBuilder
@@ -117,6 +117,7 @@ public class TestHashAggregationOperator
 
         HashAggregationOperatorFactory operatorFactory = new HashAggregationOperatorFactory(
                 0,
+                new PlanNodeId("test"),
                 ImmutableList.of(VARCHAR),
                 hashChannels,
                 Step.SINGLE,
@@ -149,11 +150,11 @@ public class TestHashAggregationOperator
         assertOperatorEqualsIgnoreOrder(operator, input, expected, hashEnabled, Optional.of(hashChannels.size()));
     }
 
-    @Test(dataProvider = "hashEnabledValues", expectedExceptions = ExceededMemoryLimitException.class, expectedExceptionsMessageRegExp = "Task exceeded max memory size of 10B")
+    @Test(dataProvider = "hashEnabledValues", expectedExceptions = ExceededMemoryLimitException.class, expectedExceptionsMessageRegExp = "Query exceeded local memory limit of 10B")
     public void testMemoryLimit(boolean hashEnabled)
     {
         MetadataManager metadata = MetadataManager.createTestMetadataManager();
-        InternalAggregationFunction maxVarcharColumn = metadata.resolveFunction(QualifiedName.of("max"), ImmutableList.of(parseTypeSignature(StandardTypes.VARCHAR)), false).getAggregationFunction();
+        InternalAggregationFunction maxVarcharColumn = metadata.getFunctionRegistry().getAggregateFunctionImplementation(new Signature("max", AGGREGATE, StandardTypes.VARCHAR, StandardTypes.VARCHAR));
 
         List<Integer> hashChannels = Ints.asList(1);
         RowPagesBuilder rowPagesBuilder = rowPagesBuilder(hashEnabled, hashChannels, VARCHAR, VARCHAR, VARCHAR, BIGINT);
@@ -169,6 +170,7 @@ public class TestHashAggregationOperator
 
         HashAggregationOperatorFactory operatorFactory = new HashAggregationOperatorFactory(
                 0,
+                new PlanNodeId("test"),
                 ImmutableList.of(VARCHAR),
                 hashChannels,
                 Step.SINGLE,
@@ -207,6 +209,7 @@ public class TestHashAggregationOperator
 
         HashAggregationOperatorFactory operatorFactory = new HashAggregationOperatorFactory(
                 0,
+                new PlanNodeId("test"),
                 ImmutableList.of(VARCHAR),
                 hashChannels,
                 Step.SINGLE,
@@ -221,7 +224,7 @@ public class TestHashAggregationOperator
         toPages(operator, input);
     }
 
-    @Test(dataProvider = "hashEnabledValues", expectedExceptions = PrestoException.class, expectedExceptionsMessageRegExp = "Task exceeded max memory size of 3MB")
+    @Test(dataProvider = "hashEnabledValues", expectedExceptions = ExceededMemoryLimitException.class, expectedExceptionsMessageRegExp = "Query exceeded local memory limit of 3MB")
     public void testHashBuilderResizeLimit(boolean hashEnabled)
     {
         BlockBuilder builder = VARCHAR.createBlockBuilder(new BlockBuilderStatus(), 1, DEFAULT_MAX_BLOCK_SIZE_IN_BYTES);
@@ -242,6 +245,7 @@ public class TestHashAggregationOperator
 
         HashAggregationOperatorFactory operatorFactory = new HashAggregationOperatorFactory(
                 0,
+                new PlanNodeId("test"),
                 ImmutableList.of(VARCHAR),
                 hashChannels,
                 Step.SINGLE,
@@ -272,6 +276,7 @@ public class TestHashAggregationOperator
 
         HashAggregationOperatorFactory operatorFactory = new HashAggregationOperatorFactory(
                 0,
+                new PlanNodeId("test"),
                 ImmutableList.of(BIGINT),
                 hashChannels,
                 Step.SINGLE,
@@ -302,6 +307,7 @@ public class TestHashAggregationOperator
 
         HashAggregationOperatorFactory operatorFactory = new HashAggregationOperatorFactory(
                 0,
+                new PlanNodeId("test"),
                 ImmutableList.of(BIGINT),
                 hashChannels,
                 Step.PARTIAL,

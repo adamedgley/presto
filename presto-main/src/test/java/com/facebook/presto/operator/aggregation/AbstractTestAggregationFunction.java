@@ -15,13 +15,14 @@ package com.facebook.presto.operator.aggregation;
 
 import com.facebook.presto.block.BlockEncodingManager;
 import com.facebook.presto.metadata.FunctionRegistry;
+import com.facebook.presto.metadata.Signature;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.BlockBuilderStatus;
+import com.facebook.presto.spi.block.RunLengthEncodedBlock;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeSignature;
 import com.facebook.presto.sql.tree.QualifiedName;
-import com.facebook.presto.testing.RunLengthEncodedBlock;
 import com.facebook.presto.type.TypeRegistry;
 import com.google.common.collect.Lists;
 import org.testng.annotations.Test;
@@ -39,7 +40,8 @@ public abstract class AbstractTestAggregationFunction
 
     protected final InternalAggregationFunction getFunction()
     {
-        return functionRegistry.resolveFunction(QualifiedName.of(getFunctionName()), Lists.transform(getFunctionParameterTypes(), TypeSignature::parseTypeSignature), isApproximate()).getAggregationFunction();
+        Signature signature = functionRegistry.resolveFunction(QualifiedName.of(getFunctionName()), Lists.transform(getFunctionParameterTypes(), TypeSignature::parseTypeSignature), isApproximate());
+        return functionRegistry.getAggregateFunctionImplementation(signature);
     }
 
     protected abstract String getFunctionName();
@@ -146,6 +148,6 @@ public abstract class AbstractTestAggregationFunction
 
     protected void testAggregation(Object expectedValue, Block... blocks)
     {
-        assertAggregation(getFunction(), getConfidence(), expectedValue, blocks[0].getPositionCount(), blocks);
+        assertAggregation(getFunction(), getConfidence(), expectedValue, blocks);
     }
 }

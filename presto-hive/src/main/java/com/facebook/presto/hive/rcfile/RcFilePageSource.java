@@ -36,6 +36,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.primitives.Ints;
 import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
+import io.airlift.units.DataSize;
 import org.apache.hadoop.hive.ql.io.RCFile;
 import org.apache.hadoop.hive.ql.io.RCFile.Reader;
 import org.apache.hadoop.hive.serde2.columnar.BytesRefArrayWritable;
@@ -65,16 +66,17 @@ import static com.facebook.presto.spi.type.TimestampType.TIMESTAMP;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.Maps.uniqueIndex;
 import static java.lang.String.format;
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static java.util.Objects.requireNonNull;
 
 public class RcFilePageSource
         implements ConnectorPageSource
 {
     private static final int MAX_PAGE_SIZE = 1024;
+    private static final long GUESSED_MEMORY_USAGE = new DataSize(16, DataSize.Unit.MEGABYTE).toBytes();
     public static final int MAX_FIXED_WIDTH_SIZE = 8;
     public static final int NULL_ENTRY_SIZE = 0;
 
@@ -115,13 +117,13 @@ public class RcFilePageSource
             DateTimeZone hiveStorageTimeZone,
             TypeManager typeManager)
     {
-        this.recordReader = checkNotNull(recordReader, "recordReader is null");
-        this.blockLoader = checkNotNull(blockLoader, "blockLoader is null");
-        checkNotNull(splitSchema, "splitSchema is null");
-        checkNotNull(partitionKeys, "partitionKeys is null");
-        checkNotNull(columns, "columns is null");
-        checkNotNull(hiveStorageTimeZone, "hiveStorageTimeZone is null");
-        checkNotNull(typeManager, "typeManager is null");
+        this.recordReader = requireNonNull(recordReader, "recordReader is null");
+        this.blockLoader = requireNonNull(blockLoader, "blockLoader is null");
+        requireNonNull(splitSchema, "splitSchema is null");
+        requireNonNull(partitionKeys, "partitionKeys is null");
+        requireNonNull(columns, "columns is null");
+        requireNonNull(hiveStorageTimeZone, "hiveStorageTimeZone is null");
+        requireNonNull(typeManager, "typeManager is null");
 
         // seek to start
         try {
@@ -349,9 +351,15 @@ public class RcFilePageSource
                 .toString();
     }
 
+    @Override
+    public long getSystemMemoryUsage()
+    {
+        return GUESSED_MEMORY_USAGE;
+    }
+
     private void closeWithSuppression(Throwable throwable)
     {
-        checkNotNull(throwable, "throwable is null");
+        requireNonNull(throwable, "throwable is null");
         try {
             close();
         }

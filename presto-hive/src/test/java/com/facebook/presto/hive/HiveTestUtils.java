@@ -17,6 +17,7 @@ import com.facebook.presto.hive.orc.DwrfPageSourceFactory;
 import com.facebook.presto.hive.orc.DwrfRecordCursorProvider;
 import com.facebook.presto.hive.orc.OrcPageSourceFactory;
 import com.facebook.presto.hive.orc.OrcRecordCursorProvider;
+import com.facebook.presto.hive.parquet.ParquetRecordCursorProvider;
 import com.facebook.presto.hive.rcfile.RcFilePageSourceFactory;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ConnectorSession;
@@ -24,13 +25,9 @@ import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.testing.TestingConnectorSession;
 import com.facebook.presto.type.TypeRegistry;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 
 import java.util.List;
-
-import static com.facebook.presto.spi.type.TimeZoneKey.UTC_KEY;
-import static java.util.Locale.ENGLISH;
 
 public final class HiveTestUtils
 {
@@ -39,12 +36,7 @@ public final class HiveTestUtils
     }
 
     public static final ConnectorSession SESSION = new TestingConnectorSession(
-            "user",
-            UTC_KEY,
-            ENGLISH,
-            System.currentTimeMillis(),
-            new HiveSessionProperties(new HiveClientConfig()).getSessionProperties(),
-            ImmutableMap.of());
+            new HiveSessionProperties(new HiveClientConfig()).getSessionProperties());
 
     public static final TypeRegistry TYPE_MANAGER = new TypeRegistry();
 

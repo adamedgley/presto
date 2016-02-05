@@ -13,14 +13,12 @@
  */
 package com.facebook.presto.operator.scalar;
 
-import com.facebook.presto.metadata.FunctionInfo;
+import com.facebook.presto.annotation.UsedByGeneratedCode;
 import com.facebook.presto.metadata.FunctionRegistry;
 import com.facebook.presto.metadata.OperatorType;
-import com.facebook.presto.metadata.ParametricScalar;
-import com.facebook.presto.metadata.Signature;
+import com.facebook.presto.metadata.SqlScalarFunction;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.block.Block;
-import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
 import com.google.common.collect.ImmutableList;
@@ -30,19 +28,18 @@ import io.airlift.slice.Slice;
 import java.lang.invoke.MethodHandle;
 import java.util.Map;
 
+import static com.facebook.presto.metadata.Signature.internalOperator;
 import static com.facebook.presto.metadata.Signature.orderableTypeParameter;
 import static com.facebook.presto.spi.StandardErrorCode.INTERNAL_ERROR;
-import static com.facebook.presto.type.TypeUtils.parameterizedTypeName;
+import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.util.Reflection.methodHandle;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Throwables.propagateIfInstanceOf;
 
 public abstract class AbstractArrayMinMaxFunction
-        extends ParametricScalar
+        extends SqlScalarFunction
 {
     private final OperatorType operatorType;
-    private final String functionName;
-    private final Signature signature;
     private final String description;
 
     private static final Map<Class<?>, MethodHandle> METHOD_HANDLES = ImmutableMap.<Class<?>, MethodHandle>builder()
@@ -56,16 +53,9 @@ public abstract class AbstractArrayMinMaxFunction
 
     protected AbstractArrayMinMaxFunction(OperatorType operatorType, String functionName, String description)
     {
+        super(functionName, ImmutableList.of(orderableTypeParameter("E")), "E", ImmutableList.of("array(E)"));
         this.operatorType = operatorType;
-        this.functionName = functionName;
-        this.signature = new Signature(functionName, ImmutableList.of(orderableTypeParameter("E")), "E", ImmutableList.of("array<E>"), false, false);
         this.description = description;
-    }
-
-    @Override
-    public Signature getSignature()
-    {
-        return signature;
     }
 
     @Override
@@ -87,13 +77,13 @@ public abstract class AbstractArrayMinMaxFunction
     }
 
     @Override
-    public FunctionInfo specialize(Map<String, Type> types, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
+    public ScalarFunctionImplementation specialize(Map<String, Type> types, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
     {
         checkArgument(types.size() == 1, "Expected one type, got %s", types);
         Type elementType = types.get("E");
         checkArgument(elementType.isOrderable(), "Type must be orderable");
 
-        MethodHandle compareMethodHandle = functionRegistry.resolveOperator(operatorType, ImmutableList.of(elementType, elementType)).getMethodHandle();
+        MethodHandle compareMethodHandle = functionRegistry.getScalarFunctionImplementation(internalOperator(operatorType, BOOLEAN, ImmutableList.of(elementType, elementType))).getMethodHandle();
         MethodHandle methodHandle = METHOD_HANDLES.get(elementType.getJavaType());
         if (methodHandle == null) {
             methodHandle = METHOD_HANDLE_OBJECT;
@@ -101,15 +91,15 @@ public abstract class AbstractArrayMinMaxFunction
         }
         methodHandle = methodHandle.bindTo(compareMethodHandle).bindTo(elementType);
 
-        Signature signature = new Signature(functionName, elementType.getTypeSignature(), parameterizedTypeName(StandardTypes.ARRAY, elementType.getTypeSignature()));
-
-        return new FunctionInfo(signature, getDescription(), isHidden(), methodHandle, isDeterministic(), true, ImmutableList.of(false));
+        return new ScalarFunctionImplementation(true, ImmutableList.of(false), methodHandle, isDeterministic());
     }
 
+    @UsedByGeneratedCode
     public static void arrayWithUnknownType(MethodHandle compareMethodHandle, Type elementType, Block block)
     {
     }
 
+    @UsedByGeneratedCode
     public static Long longArrayMinMax(MethodHandle compareMethodHandle, Type elementType, Block block)
     {
         try {
@@ -137,6 +127,7 @@ public abstract class AbstractArrayMinMaxFunction
         }
     }
 
+    @UsedByGeneratedCode
     public static Boolean booleanArrayMinMax(MethodHandle compareMethodHandle, Type elementType, Block block)
     {
         try {
@@ -164,6 +155,7 @@ public abstract class AbstractArrayMinMaxFunction
         }
     }
 
+    @UsedByGeneratedCode
     public static Double doubleArrayMinMax(MethodHandle compareMethodHandle, Type elementType, Block block)
     {
         try {
@@ -191,6 +183,7 @@ public abstract class AbstractArrayMinMaxFunction
         }
     }
 
+    @UsedByGeneratedCode
     public static Slice sliceArrayMinMax(MethodHandle compareMethodHandle, Type elementType, Block block)
     {
         try {
@@ -218,6 +211,7 @@ public abstract class AbstractArrayMinMaxFunction
         }
     }
 
+    @UsedByGeneratedCode
     public static Object objectArrayMinMax(MethodHandle compareMethodHandle, Type elementType, Block block)
     {
         try {

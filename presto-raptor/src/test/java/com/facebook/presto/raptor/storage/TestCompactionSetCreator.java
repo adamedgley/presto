@@ -21,6 +21,7 @@ import org.testng.annotations.Test;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.OptionalInt;
 import java.util.OptionalLong;
 import java.util.Set;
 import java.util.UUID;
@@ -35,11 +36,13 @@ import static org.testng.Assert.assertEquals;
 
 public class TestCompactionSetCreator
 {
+    private static final long MAX_SHARD_ROWS = 10_000;
+
     @Test
     public void testNonTemporalCompactionSetSimple()
             throws Exception
     {
-        CompactionSetCreator compactionSetCreator = new FileCompactionSetCreator(new DataSize(1, KILOBYTE));
+        CompactionSetCreator compactionSetCreator = new FileCompactionSetCreator(new DataSize(1, KILOBYTE), MAX_SHARD_ROWS);
 
         // compact into one shard
         Set<ShardMetadata> inputShards = ImmutableSet.of(
@@ -56,7 +59,7 @@ public class TestCompactionSetCreator
     public void testNonTemporalCompactionSet()
             throws Exception
     {
-        CompactionSetCreator compactionSetCreator = new FileCompactionSetCreator(new DataSize(100, BYTE));
+        CompactionSetCreator compactionSetCreator = new FileCompactionSetCreator(new DataSize(100, BYTE), MAX_SHARD_ROWS);
         long tableId = 1L;
 
         // compact into two shards
@@ -78,9 +81,9 @@ public class TestCompactionSetCreator
     public void testTemporalCompactionNoCompactionAcrossDays()
             throws Exception
     {
-        CompactionSetCreator compactionSetCreator = new TemporalCompactionSetCreator(new DataSize(100, BYTE), TIMESTAMP);
+        CompactionSetCreator compactionSetCreator = new TemporalCompactionSetCreator(new DataSize(100, BYTE), MAX_SHARD_ROWS, TIMESTAMP);
         long tableId = 1L;
-        long day1 = Duration.ofDays(Duration.ofMillis(System.currentTimeMillis()).toDays()).toMillis();
+        long day1 = Duration.ofDays(Duration.ofNanos(System.nanoTime()).toDays()).toMillis();
         long day2 = Duration.ofDays(Duration.ofMillis(day1).toDays() + 1).toMillis();
 
         // compact into two shards
@@ -101,9 +104,9 @@ public class TestCompactionSetCreator
     public void testTemporalCompactionSpanningDays()
             throws Exception
     {
-        CompactionSetCreator compactionSetCreator = new TemporalCompactionSetCreator(new DataSize(100, BYTE), TIMESTAMP);
+        CompactionSetCreator compactionSetCreator = new TemporalCompactionSetCreator(new DataSize(100, BYTE), MAX_SHARD_ROWS, TIMESTAMP);
         long tableId = 1L;
-        long day1 = Duration.ofDays(Duration.ofMillis(System.currentTimeMillis()).toDays()).toMillis();
+        long day1 = Duration.ofDays(Duration.ofNanos(System.nanoTime()).toDays()).toMillis();
         long day2 = Duration.ofDays(Duration.ofMillis(day1).toDays() + 1).toMillis();
         long day3 = Duration.ofDays(Duration.ofMillis(day1).toDays() + 2).toMillis();
         long day4 = Duration.ofDays(Duration.ofMillis(day1).toDays() + 3).toMillis();
@@ -130,9 +133,9 @@ public class TestCompactionSetCreator
     public void testTemporalCompactionDate()
             throws Exception
     {
-        CompactionSetCreator compactionSetCreator = new TemporalCompactionSetCreator(new DataSize(100, BYTE), DATE);
+        CompactionSetCreator compactionSetCreator = new TemporalCompactionSetCreator(new DataSize(100, BYTE), MAX_SHARD_ROWS, DATE);
         long tableId = 1L;
-        long day1 = Duration.ofMillis(System.currentTimeMillis()).toDays();
+        long day1 = Duration.ofNanos(System.nanoTime()).toDays();
         long day2 = day1 + 1;
         long day3 = day1 + 2;
 
@@ -157,7 +160,9 @@ public class TestCompactionSetCreator
     {
         return new ShardMetadata(
                 1,
+                1,
                 UUID.randomUUID(),
+                OptionalInt.empty(),
                 10,
                 10,
                 uncompressedSize,
@@ -168,8 +173,10 @@ public class TestCompactionSetCreator
     private static ShardMetadata shardWithRange(long uncompressedSize, long rangeStart, long rangeEnd)
     {
         return new ShardMetadata(
+                1,
                 ThreadLocalRandom.current().nextInt(1, 10),
                 UUID.randomUUID(),
+                OptionalInt.empty(),
                 10,
                 10,
                 uncompressedSize,

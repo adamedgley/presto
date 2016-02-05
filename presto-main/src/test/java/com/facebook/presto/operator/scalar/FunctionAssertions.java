@@ -16,8 +16,8 @@ package com.facebook.presto.operator.scalar;
 import com.facebook.presto.Session;
 import com.facebook.presto.metadata.FunctionListBuilder;
 import com.facebook.presto.metadata.Metadata;
-import com.facebook.presto.metadata.ParametricFunction;
 import com.facebook.presto.metadata.Split;
+import com.facebook.presto.metadata.SqlFunction;
 import com.facebook.presto.operator.CursorProcessor;
 import com.facebook.presto.operator.DriverContext;
 import com.facebook.presto.operator.FilterAndProjectOperator;
@@ -40,6 +40,7 @@ import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.RecordPageSource;
 import com.facebook.presto.spi.RecordSet;
 import com.facebook.presto.spi.block.Block;
+import com.facebook.presto.spi.type.TimeZoneKey;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.split.PageSourceProvider;
 import com.facebook.presto.sql.analyzer.ExpressionAnalysis;
@@ -54,17 +55,22 @@ import com.facebook.presto.sql.relational.RowExpression;
 import com.facebook.presto.sql.relational.SqlToRowExpressionTranslator;
 import com.facebook.presto.sql.tree.Cast;
 import com.facebook.presto.sql.tree.DefaultTraversalVisitor;
+import com.facebook.presto.sql.tree.DereferenceExpression;
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.ExpressionRewriter;
 import com.facebook.presto.sql.tree.ExpressionTreeRewriter;
+import com.facebook.presto.sql.tree.FunctionCall;
+import com.facebook.presto.sql.tree.QualifiedName;
 import com.facebook.presto.sql.tree.QualifiedNameReference;
 import com.facebook.presto.testing.LocalQueryRunner;
 import com.facebook.presto.testing.MaterializedResult;
+import com.facebook.presto.testing.TestingTransactionHandle;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import com.google.common.util.concurrent.UncheckedExecutionException;
 import io.airlift.slice.Slice;
+import io.airlift.slice.Slices;
 import org.joda.time.DateTime;
 import org.joda.time.DateTimeZone;
 
@@ -75,28 +81,36 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 
 import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
 import static com.facebook.presto.block.BlockAssertions.createBooleansBlock;
 import static com.facebook.presto.block.BlockAssertions.createDoublesBlock;
 import static com.facebook.presto.block.BlockAssertions.createLongsBlock;
+import static com.facebook.presto.block.BlockAssertions.createSlicesBlock;
 import static com.facebook.presto.block.BlockAssertions.createStringsBlock;
+import static com.facebook.presto.block.BlockAssertions.createTimestampsWithTimezoneBlock;
+import static com.facebook.presto.metadata.FunctionKind.SCALAR;
 import static com.facebook.presto.operator.scalar.FunctionAssertions.TestSplit.createNormalSplit;
 import static com.facebook.presto.operator.scalar.FunctionAssertions.TestSplit.createRecordSetSplit;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
+import static com.facebook.presto.spi.type.DateTimeEncoding.packDateTimeWithZone;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
+import static com.facebook.presto.spi.type.TimestampWithTimeZoneType.TIMESTAMP_WITH_TIME_ZONE;
+import static com.facebook.presto.spi.type.VarbinaryType.VARBINARY;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
+import static com.facebook.presto.sql.QueryUtil.mangleFieldReference;
 import static com.facebook.presto.sql.analyzer.ExpressionAnalyzer.analyzeExpressionsWithSymbols;
 import static com.facebook.presto.sql.analyzer.ExpressionAnalyzer.getExpressionTypesFromInput;
 import static com.facebook.presto.sql.planner.LocalExecutionPlanner.toTypes;
 import static com.facebook.presto.sql.planner.optimizations.CanonicalizeExpressions.canonicalizeExpression;
 import static com.facebook.presto.sql.tree.BooleanLiteral.TRUE_LITERAL;
 import static com.facebook.presto.testing.TestingTaskContext.createTaskContext;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static com.facebook.presto.type.TypeRegistry.isTypeOnlyCoercion;
 import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static io.airlift.testing.Assertions.assertInstanceOf;
-import static java.nio.charset.StandardCharsets.UTF_8;
+import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.Executors.newCachedThreadPool;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNotNull;
@@ -116,7 +130,10 @@ public final class FunctionAssertions
             createBooleansBlock(true),
             createLongsBlock(new DateTime(2001, 8, 22, 3, 4, 5, 321, DateTimeZone.UTC).getMillis()),
             createStringsBlock("%el%"),
-            createStringsBlock((String) null));
+            createStringsBlock((String) null),
+            createTimestampsWithTimezoneBlock(packDateTimeWithZone(new DateTime(1970, 1, 1, 0, 1, 0, 999, DateTimeZone.UTC).getMillis(), TimeZoneKey.getTimeZoneKey("Z"))),
+            createSlicesBlock(Slices.wrappedBuffer((byte) 0xab))
+    );
 
     private static final Page ZERO_CHANNEL_PAGE = new Page(1);
 
@@ -128,6 +145,8 @@ public final class FunctionAssertions
             .put(4, BIGINT)
             .put(5, VARCHAR)
             .put(6, VARCHAR)
+            .put(7, TIMESTAMP_WITH_TIME_ZONE)
+            .put(8, VARBINARY)
             .build();
 
     private static final Map<Symbol, Integer> INPUT_MAPPING = ImmutableMap.<Symbol, Integer>builder()
@@ -138,6 +157,8 @@ public final class FunctionAssertions
             .put(new Symbol("bound_timestamp"), 4)
             .put(new Symbol("bound_pattern"), 5)
             .put(new Symbol("bound_null_string"), 6)
+            .put(new Symbol("bound_timestamp_with_timezone"), 7)
+            .put(new Symbol("bound_binary_literal"), 8)
             .build();
 
     private static final Map<Symbol, Type> SYMBOL_TYPES = ImmutableMap.<Symbol, Type>builder()
@@ -148,6 +169,8 @@ public final class FunctionAssertions
             .put(new Symbol("bound_timestamp"), BIGINT)
             .put(new Symbol("bound_pattern"), VARCHAR)
             .put(new Symbol("bound_null_string"), VARCHAR)
+            .put(new Symbol("bound_timestamp_with_timezone"), TIMESTAMP_WITH_TIME_ZONE)
+            .put(new Symbol("bound_binary_literal"), VARBINARY)
             .build();
 
     private static final PageSourceProvider PAGE_SOURCE_PROVIDER = new TestPageSourceProvider();
@@ -165,7 +188,7 @@ public final class FunctionAssertions
 
     public FunctionAssertions(Session session)
     {
-        this.session = checkNotNull(session, "session is null");
+        this.session = requireNonNull(session, "session is null");
         runner = new LocalQueryRunner(session);
         metadata = runner.getMetadata();
         compiler = new ExpressionCompiler(metadata);
@@ -176,7 +199,7 @@ public final class FunctionAssertions
         return metadata;
     }
 
-    public FunctionAssertions addFunctions(List<ParametricFunction> functionInfos)
+    public FunctionAssertions addFunctions(List<SqlFunction> functionInfos)
     {
         metadata.addFunctions(functionInfos);
         return this;
@@ -194,7 +217,7 @@ public final class FunctionAssertions
             expected = ((Integer) expected).longValue();
         }
         else if (expected instanceof Slice) {
-            expected = ((Slice) expected).toString(UTF_8);
+            expected = ((Slice) expected).toStringUtf8();
         }
 
         Object actual = selectSingleValue(projection, expectedType, compiler);
@@ -239,7 +262,7 @@ public final class FunctionAssertions
 
     private List<Object> executeProjectionWithAll(String projection, Type expectedType, Session session, ExpressionCompiler compiler)
     {
-        checkNotNull(projection, "projection is null");
+        requireNonNull(projection, "projection is null");
 
         Expression projectionExpression = createExpression(projection, metadata, SYMBOL_TYPES);
 
@@ -339,7 +362,7 @@ public final class FunctionAssertions
 
     private List<Boolean> executeFilterWithAll(String filter, Session session, boolean executeWithNoInputColumns, ExpressionCompiler compiler)
     {
-        checkNotNull(filter, "filter is null");
+        requireNonNull(filter, "filter is null");
 
         Expression filterExpression = createExpression(filter, metadata, SYMBOL_TYPES);
 
@@ -399,6 +422,32 @@ public final class FunctionAssertions
             public Expression rewriteExpression(Expression node, Void context, ExpressionTreeRewriter<Void> treeRewriter)
             {
                 Expression rewrittenExpression = treeRewriter.defaultRewrite(node, context);
+
+                // cast expression if coercion is registered
+                Type type = analysis.getType(node);
+                Type coercion = analysis.getCoercion(node);
+                if (coercion != null) {
+                    rewrittenExpression = new Cast(
+                            rewrittenExpression,
+                            coercion.getTypeSignature().toString(),
+                            false,
+                            isTypeOnlyCoercion(type.getTypeSignature(), coercion.getTypeSignature()));
+                }
+
+                return rewrittenExpression;
+            }
+
+            @Override
+            public Expression rewriteDereferenceExpression(DereferenceExpression node, Void context, ExpressionTreeRewriter<Void> treeRewriter)
+            {
+                if (analysis.getColumnReferences().contains(node)) {
+                    return rewriteExpression(node, context, treeRewriter);
+                }
+
+                // Rewrite all row field reference to function call.
+                QualifiedName mangledName = QualifiedName.of(mangleFieldReference(node.getFieldName()));
+                FunctionCall functionCall = new FunctionCall(mangledName, ImmutableList.of(node.getBase()));
+                Expression rewrittenExpression = rewriteFunctionCall(functionCall, context, treeRewriter);
 
                 // cast expression if coercion is registered
                 Type coercion = analysis.getCoercion(node);
@@ -468,7 +517,7 @@ public final class FunctionAssertions
     private static boolean needsBoundValue(Expression projectionExpression)
     {
         final AtomicBoolean hasQualifiedNameReference = new AtomicBoolean();
-        projectionExpression.accept(new DefaultTraversalVisitor<Void, Void>()
+        new DefaultTraversalVisitor<Void, Void>()
         {
             @Override
             protected Void visitQualifiedNameReference(QualifiedNameReference node, Void context)
@@ -476,7 +525,8 @@ public final class FunctionAssertions
                 hasQualifiedNameReference.set(true);
                 return null;
             }
-        }, null);
+        }.process(projectionExpression, null);
+
         return hasQualifiedNameReference.get();
     }
 
@@ -500,7 +550,7 @@ public final class FunctionAssertions
                 session
         );
 
-        OperatorFactory operatorFactory = new FilterAndProjectOperator.FilterAndProjectOperatorFactory(0, new GenericPageProcessor(filterFunction, ImmutableList.of(projectionFunction)), toTypes(
+        OperatorFactory operatorFactory = new FilterAndProjectOperator.FilterAndProjectOperatorFactory(0, new PlanNodeId("test"), () -> new GenericPageProcessor(filterFunction, ImmutableList.of(projectionFunction)), toTypes(
                 ImmutableList.of(projectionFunction)));
         return operatorFactory.createOperator(createDriverContext(session));
     }
@@ -512,9 +562,9 @@ public final class FunctionAssertions
         IdentityHashMap<Expression, Type> expressionTypes = getExpressionTypesFromInput(TEST_SESSION, metadata, SQL_PARSER, INPUT_TYPES, ImmutableList.of(filter));
 
         try {
-            PageProcessor processor = compiler.compilePageProcessor(toRowExpression(filter, expressionTypes), ImmutableList.of());
+            Supplier<PageProcessor> processor = compiler.compilePageProcessor(toRowExpression(filter, expressionTypes), ImmutableList.of());
 
-            return new FilterAndProjectOperator.FilterAndProjectOperatorFactory(0, processor, ImmutableList.<Type>of());
+            return new FilterAndProjectOperator.FilterAndProjectOperatorFactory(0, new PlanNodeId("test"), processor, ImmutableList.<Type>of());
         }
         catch (Throwable e) {
             if (e instanceof UncheckedExecutionException) {
@@ -529,13 +579,14 @@ public final class FunctionAssertions
         filter = ExpressionTreeRewriter.rewriteWith(new SymbolToInputRewriter(INPUT_MAPPING), filter);
         projection = ExpressionTreeRewriter.rewriteWith(new SymbolToInputRewriter(INPUT_MAPPING), projection);
 
-        IdentityHashMap<Expression, Type> expressionTypes = getExpressionTypesFromInput(TEST_SESSION, metadata, SQL_PARSER, INPUT_TYPES, ImmutableList.of(filter, projection));
+        IdentityHashMap<Expression, Type> expressionTypes = getExpressionTypesFromInput(TEST_SESSION, metadata,
+                SQL_PARSER, INPUT_TYPES, ImmutableList.of(filter, projection));
 
         try {
             List<RowExpression> projections = ImmutableList.of(toRowExpression(projection, expressionTypes));
-            PageProcessor processor = compiler.compilePageProcessor(toRowExpression(filter, expressionTypes), projections);
+            Supplier<PageProcessor> processor = compiler.compilePageProcessor(toRowExpression(filter, expressionTypes), projections);
 
-            return new FilterAndProjectOperator.FilterAndProjectOperatorFactory(0, processor, ImmutableList.of(expressionTypes.get(projection)));
+            return new FilterAndProjectOperator.FilterAndProjectOperatorFactory(0, new PlanNodeId("test"), processor, ImmutableList.of(expressionTypes.get(projection)));
         }
         catch (Throwable e) {
             if (e instanceof UncheckedExecutionException) {
@@ -550,7 +601,8 @@ public final class FunctionAssertions
         filter = ExpressionTreeRewriter.rewriteWith(new SymbolToInputRewriter(INPUT_MAPPING), filter);
         projection = ExpressionTreeRewriter.rewriteWith(new SymbolToInputRewriter(INPUT_MAPPING), projection);
 
-        IdentityHashMap<Expression, Type> expressionTypes = getExpressionTypesFromInput(TEST_SESSION, metadata, SQL_PARSER, INPUT_TYPES, ImmutableList.of(filter, projection));
+        IdentityHashMap<Expression, Type> expressionTypes = getExpressionTypesFromInput(TEST_SESSION, metadata,
+                SQL_PARSER, INPUT_TYPES, ImmutableList.of(filter, projection));
 
         try {
             CursorProcessor cursorProcessor = compiler.compileCursorProcessor(
@@ -558,12 +610,13 @@ public final class FunctionAssertions
                     ImmutableList.of(toRowExpression(projection, expressionTypes)),
                     SOURCE_ID);
 
-            PageProcessor pageProcessor = compiler.compilePageProcessor(
+            Supplier<PageProcessor> pageProcessor = compiler.compilePageProcessor(
                     toRowExpression(filter, expressionTypes),
                     ImmutableList.of(toRowExpression(projection, expressionTypes)));
 
             return new ScanFilterAndProjectOperator.ScanFilterAndProjectOperatorFactory(
                     0,
+                    new PlanNodeId("test"),
                     SOURCE_ID,
                     PAGE_SOURCE_PROVIDER,
                     cursorProcessor,
@@ -581,7 +634,7 @@ public final class FunctionAssertions
 
     private RowExpression toRowExpression(Expression projection, IdentityHashMap<Expression, Type> expressionTypes)
     {
-        return SqlToRowExpressionTranslator.translate(projection, expressionTypes, metadata.getFunctionRegistry(), metadata.getTypeManager(), session, false);
+        return SqlToRowExpressionTranslator.translate(projection, SCALAR, expressionTypes, metadata.getFunctionRegistry(), metadata.getTypeManager(), session, false);
     }
 
     private static Page getAtMostOnePage(Operator operator, Page sourcePage)
@@ -635,15 +688,18 @@ public final class FunctionAssertions
             assertInstanceOf(split.getConnectorSplit(), FunctionAssertions.TestSplit.class);
             FunctionAssertions.TestSplit testSplit = (FunctionAssertions.TestSplit) split.getConnectorSplit();
             if (testSplit.isRecordSet()) {
-                RecordSet records = InMemoryRecordSet.builder(ImmutableList.<Type>of(BIGINT, VARCHAR, DOUBLE, BOOLEAN, BIGINT, VARCHAR, VARCHAR)).addRow(
-                        1234L,
-                        "hello",
-                        12.34,
-                        true,
-                        new DateTime(2001, 8, 22, 3, 4, 5, 321, DateTimeZone.UTC).getMillis(),
-                        "%el%",
-                        null
-                ).build();
+                RecordSet records = InMemoryRecordSet.builder(ImmutableList.<Type>of(BIGINT, VARCHAR, DOUBLE, BOOLEAN, BIGINT, VARCHAR, VARCHAR, TIMESTAMP_WITH_TIME_ZONE, VARBINARY))
+                        .addRow(
+                                1234L,
+                                "hello",
+                                12.34,
+                                true,
+                                new DateTime(2001, 8, 22, 3, 4, 5, 321, DateTimeZone.UTC).getMillis(),
+                                "%el%",
+                                null,
+                                packDateTimeWithZone(new DateTime(1970, 1, 1, 0, 1, 0, 999, DateTimeZone.UTC).getMillis(), TimeZoneKey.getTimeZoneKey("Z")),
+                                Slices.wrappedBuffer((byte) 0xab))
+                        .build();
                 return new RecordPageSource(records);
             }
             else {
@@ -657,12 +713,12 @@ public final class FunctionAssertions
     {
         static Split createRecordSetSplit()
         {
-            return new Split("test", new TestSplit(true));
+            return new Split("test", TestingTransactionHandle.create("test"), new TestSplit(true));
         }
 
         static Split createNormalSplit()
         {
-            return new Split("test", new TestSplit(false));
+            return new Split("test", TestingTransactionHandle.create("test"), new TestSplit(false));
         }
 
         private final boolean recordSet;

@@ -16,6 +16,7 @@ package com.facebook.presto.spi.block;
 import io.airlift.slice.SizeOf;
 import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
+import org.openjdk.jol.info.ClassLayout;
 
 import java.util.Arrays;
 import java.util.IdentityHashMap;
@@ -27,12 +28,19 @@ import static com.facebook.presto.spi.block.BlockValidationUtil.checkValidPositi
 public class SliceArrayBlock
         extends AbstractVariableWidthBlock
 {
+    private static final int INSTANCE_SIZE = ClassLayout.parseClass(SliceArrayBlock.class).instanceSize();
+
     private final int positionCount;
     private final Slice[] values;
     private final int sizeInBytes;
     private final int retainedSizeInBytes;
 
     public SliceArrayBlock(int positionCount, Slice[] values)
+    {
+        this(positionCount, values, false);
+    }
+
+    public SliceArrayBlock(int positionCount, Slice[] values, boolean valueSlicesAreDistinct)
     {
         this.positionCount = positionCount;
 
@@ -42,7 +50,9 @@ public class SliceArrayBlock
         this.values = values;
 
         sizeInBytes = getSliceArraySizeInBytes(values);
-        retainedSizeInBytes = getSliceArrayRetainedSizeInBytes(values);
+
+        // if values are distinct, use the already computed value
+        retainedSizeInBytes = INSTANCE_SIZE + (valueSlicesAreDistinct ? sizeInBytes : getSliceArrayRetainedSizeInBytes(values));
     }
 
     public Slice[] getValues()
@@ -135,27 +145,6 @@ public class SliceArrayBlock
         return new SliceArrayBlock(length, deepCopyAndCompact(values, positionOffset, length));
     }
 
-    static Slice[] deepCopyAndCompactDictionary(Slice[] values, int[] ids, int positionOffset, int length)
-    {
-        Slice[] newValues = new Slice[length];
-        // Compact the slices. Use an IdentityHashMap because this could be very expensive otherwise.
-        Map<Slice, Slice> distinctValues = new IdentityHashMap<>();
-        for (int i = positionOffset; i < positionOffset + length; i++) {
-            Slice slice = values[ids[i]];
-            if (slice == null) {
-                continue;
-            }
-
-            Slice distinct = distinctValues.get(slice);
-            if (distinct == null) {
-                distinct = Slices.copyOf(slice);
-                distinctValues.put(slice, distinct);
-            }
-            newValues[i] = distinct;
-        }
-        return newValues;
-    }
-
     static Slice[] deepCopyAndCompact(Slice[] values, int positionOffset, int length)
     {
         Slice[] newValues = Arrays.copyOfRange(values, positionOffset, positionOffset + length);
@@ -202,7 +191,7 @@ public class SliceArrayBlock
     static int getSliceArrayRetainedSizeInBytes(Slice[] values)
     {
         long sizeInBytes = SizeOf.sizeOf(values);
-        Map<Object, Boolean> uniqueRetained = new IdentityHashMap<>();
+        Map<Object, Boolean> uniqueRetained = new IdentityHashMap<>(values.length);
         for (Slice value : values) {
             if (value != null && value.getBase() != null && uniqueRetained.put(value.getBase(), true) == null) {
                 sizeInBytes += value.getRetainedSize();

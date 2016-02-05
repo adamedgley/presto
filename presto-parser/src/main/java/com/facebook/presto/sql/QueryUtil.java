@@ -14,12 +14,11 @@
 package com.facebook.presto.sql;
 
 import com.facebook.presto.sql.tree.AliasedRelation;
-import com.facebook.presto.sql.tree.BooleanLiteral;
 import com.facebook.presto.sql.tree.CoalesceExpression;
 import com.facebook.presto.sql.tree.ComparisonExpression;
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.FunctionCall;
-import com.facebook.presto.sql.tree.IfExpression;
+import com.facebook.presto.sql.tree.GroupingElement;
 import com.facebook.presto.sql.tree.LogicalBinaryExpression;
 import com.facebook.presto.sql.tree.QualifiedName;
 import com.facebook.presto.sql.tree.QualifiedNameReference;
@@ -140,15 +139,6 @@ public final class QueryUtil
         return new SingleColumn(new CoalesceExpression(nameReference(column), new StringLiteral("")), alias);
     }
 
-    public static SelectItem aliasedYesNoToBoolean(String column, String alias)
-    {
-        Expression expression = new IfExpression(
-                equal(nameReference(column), new StringLiteral("YES")),
-                BooleanLiteral.TRUE_LITERAL,
-                BooleanLiteral.FALSE_LITERAL);
-        return new SingleColumn(expression, alias);
-    }
-
     public static List<SortItem> ordering(SortItem... items)
     {
         return ImmutableList.copyOf(items);
@@ -179,13 +169,13 @@ public final class QueryUtil
         return simpleQuery(select, from, where, ImmutableList.of(), Optional.empty(), ordering, Optional.empty());
     }
 
-    public static Query simpleQuery(Select select, Relation from, Optional<Expression> where, List<Expression> grouping, Optional<Expression> having, List<SortItem> ordering, Optional<String> limit)
+    public static Query simpleQuery(Select select, Relation from, Optional<Expression> where, List<GroupingElement> groupBy, Optional<Expression> having, List<SortItem> ordering, Optional<String> limit)
     {
         return query(new QuerySpecification(
                 select,
                 Optional.of(from),
                 where,
-                grouping,
+                groupBy,
                 having,
                 ordering,
                 limit));

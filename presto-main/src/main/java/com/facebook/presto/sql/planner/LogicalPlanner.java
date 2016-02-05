@@ -15,23 +15,29 @@ package com.facebook.presto.sql.planner;
 
 import com.facebook.presto.Session;
 import com.facebook.presto.metadata.Metadata;
-import com.facebook.presto.metadata.QualifiedTableName;
-import com.facebook.presto.metadata.TableHandle;
+import com.facebook.presto.metadata.NewTableLayout;
+import com.facebook.presto.metadata.QualifiedObjectName;
 import com.facebook.presto.metadata.TableMetadata;
+import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ColumnMetadata;
 import com.facebook.presto.spi.ConnectorTableMetadata;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.sql.analyzer.Analysis;
 import com.facebook.presto.sql.analyzer.Field;
-import com.facebook.presto.sql.analyzer.TupleDescriptor;
+import com.facebook.presto.sql.analyzer.RelationType;
 import com.facebook.presto.sql.planner.optimizations.PlanOptimizer;
 import com.facebook.presto.sql.planner.plan.DeleteNode;
+import com.facebook.presto.sql.planner.plan.LimitNode;
 import com.facebook.presto.sql.planner.plan.OutputNode;
 import com.facebook.presto.sql.planner.plan.PlanNode;
-import com.facebook.presto.sql.planner.plan.TableCommitNode;
+import com.facebook.presto.sql.planner.plan.ProjectNode;
+import com.facebook.presto.sql.planner.plan.TableFinishNode;
 import com.facebook.presto.sql.planner.plan.TableWriterNode;
 import com.facebook.presto.sql.tree.Expression;
+import com.facebook.presto.sql.tree.NullLiteral;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
 
 import java.util.List;
 import java.util.Map;
@@ -44,7 +50,8 @@ import static com.facebook.presto.sql.planner.plan.TableWriterNode.CreateName;
 import static com.facebook.presto.sql.planner.plan.TableWriterNode.InsertReference;
 import static com.facebook.presto.sql.planner.plan.TableWriterNode.WriterTarget;
 import static com.facebook.presto.util.ImmutableCollectors.toImmutableList;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.lang.String.format;
+import static java.util.Objects.requireNonNull;
 
 public class LogicalPlanner
 {
@@ -60,10 +67,10 @@ public class LogicalPlanner
             PlanNodeIdAllocator idAllocator,
             Metadata metadata)
     {
-        checkNotNull(session, "session is null");
-        checkNotNull(planOptimizers, "planOptimizers is null");
-        checkNotNull(idAllocator, "idAllocator is null");
-        checkNotNull(metadata, "metadata is null");
+        requireNonNull(session, "session is null");
+        requireNonNull(planOptimizers, "planOptimizers is null");
+        requireNonNull(idAllocator, "idAllocator is null");
+        requireNonNull(metadata, "metadata is null");
 
         this.session = session;
         this.planOptimizers = planOptimizers;
@@ -77,7 +84,7 @@ public class LogicalPlanner
         if (analysis.getCreateTableDestination().isPresent()) {
             plan = createTableCreationPlan(analysis);
         }
-        else if (analysis.getInsertTarget().isPresent()) {
+        else if (analysis.getInsert().isPresent()) {
             plan = createInsertPlan(analysis);
         }
         else if (analysis.getDelete().isPresent()) {
@@ -94,7 +101,7 @@ public class LogicalPlanner
 
         for (PlanOptimizer optimizer : planOptimizers) {
             root = optimizer.optimize(root, session, symbolAllocator.getTypes(), symbolAllocator, idAllocator);
-            checkNotNull(root, "%s returned a null plan", optimizer.getClass().getName());
+            requireNonNull(root, format("%s returned a null plan", optimizer.getClass().getName()));
         }
 
         // make sure we produce a valid plan after optimizations run. This is mainly to catch programming errors
@@ -105,52 +112,116 @@ public class LogicalPlanner
 
     private RelationPlan createTableCreationPlan(Analysis analysis)
     {
-        QualifiedTableName destination = analysis.getCreateTableDestination().get();
+        QualifiedObjectName destination = analysis.getCreateTableDestination().get();
 
         RelationPlan plan = createRelationPlan(analysis);
 
         TableMetadata tableMetadata = createTableMetadata(destination, getOutputTableColumns(plan), analysis.getCreateTableProperties(), plan.getSampleWeight().isPresent());
         if (plan.getSampleWeight().isPresent() && !metadata.canCreateSampledTables(session, destination.getCatalogName())) {
-          throw new PrestoException(NOT_SUPPORTED, "Cannot write sampled data to a store that doesn't support sampling");
+            throw new PrestoException(NOT_SUPPORTED, "Cannot write sampled data to a store that doesn't support sampling");
         }
+
+        Optional<NewTableLayout> newTableLayout = metadata.getNewTableLayout(session, destination.getCatalogName(), tableMetadata);
 
         return createTableWriterPlan(
                 analysis,
                 plan,
-                new CreateName(destination.getCatalogName(), tableMetadata), getVisibleColumnNames(tableMetadata));
+                new CreateName(destination.getCatalogName(), tableMetadata, newTableLayout),
+                tableMetadata.getVisibleColumnNames(),
+                newTableLayout);
     }
 
     private RelationPlan createInsertPlan(Analysis analysis)
     {
-        TableHandle target = analysis.getInsertTarget().get();
+        Analysis.Insert insert = analysis.getInsert().get();
 
-        TableMetadata tableMetadata = metadata.getTableMetadata(session, target);
+        TableMetadata tableMetadata = metadata.getTableMetadata(session, insert.getTarget());
+
+        List<String> visibleTableColumnNames = tableMetadata.getVisibleColumnNames();
+        List<ColumnMetadata> visibleTableColumns = tableMetadata.getVisibleColumns();
+
+        RelationPlan plan = createRelationPlan(analysis);
+
+        Map<String, ColumnHandle> columns = metadata.getColumnHandles(session, insert.getTarget());
+        ImmutableMap.Builder<Symbol, Expression> assignments = ImmutableMap.builder();
+        for (ColumnMetadata column : tableMetadata.getVisibleColumns()) {
+            Symbol output = symbolAllocator.newSymbol(column.getName(), column.getType());
+            int index = insert.getColumns().indexOf(columns.get(column.getName()));
+            if (index < 0) {
+                assignments.put(output, new NullLiteral());
+            }
+            else {
+                assignments.put(output, plan.getSymbol(index).toQualifiedNameReference());
+            }
+        }
+        ProjectNode projectNode = new ProjectNode(idAllocator.getNextId(), plan.getRoot(), assignments.build());
+
+        RelationType tupleDescriptor = new RelationType(visibleTableColumns.stream()
+                .map(column -> Field.newUnqualified(column.getName(), column.getType()))
+                .collect(toImmutableList()));
+
+        plan = new RelationPlan(
+                projectNode,
+                tupleDescriptor,
+                projectNode.getOutputSymbols(),
+                plan.getSampleWeight());
+
+        Optional<NewTableLayout> newTableLayout = metadata.getInsertLayout(session, insert.getTarget());
 
         return createTableWriterPlan(
                 analysis,
-                createRelationPlan(analysis),
-                new InsertReference(target),
-                getVisibleColumnNames(tableMetadata));
+                plan,
+                new InsertReference(insert.getTarget()),
+                visibleTableColumnNames,
+                newTableLayout);
     }
 
-    private RelationPlan createTableWriterPlan(Analysis analysis, RelationPlan plan, WriterTarget target, List<String> columnNames)
+    private RelationPlan createTableWriterPlan(
+            Analysis analysis,
+            RelationPlan plan,
+            WriterTarget target,
+            List<String> columnNames,
+            Optional<NewTableLayout> writeTableLayout)
     {
         List<Symbol> writerOutputs = ImmutableList.of(
                 symbolAllocator.newSymbol("partialrows", BIGINT),
                 symbolAllocator.newSymbol("fragment", VARBINARY));
 
-        TableWriterNode writerNode = new TableWriterNode(
+        PlanNode source = plan.getRoot();
+
+        if (!analysis.isCreateTableAsSelectWithData()) {
+            source = new LimitNode(idAllocator.getNextId(), source, 0L);
+        }
+
+        // todo this should be checked in analysis
+        writeTableLayout.ifPresent(layout -> {
+            if (!ImmutableSet.copyOf(columnNames).containsAll(layout.getPartitionColumns())) {
+                throw new PrestoException(NOT_SUPPORTED, "INSERT must write all distribution columns: " + layout.getPartitionColumns());
+            }
+        });
+
+        List<Symbol> symbols = plan.getOutputSymbols();
+        Optional<PartitionFunctionBinding> partitionFunctionBinding = writeTableLayout.map(layout -> new PartitionFunctionBinding(
+                layout.getPartitioning(),
+                symbols,
+                layout.getPartitionColumns().stream()
+                        .mapToInt(columnNames::indexOf)
+                        .mapToObj(symbols::get)
+                        .collect(toImmutableList()),
+                Optional.empty()));
+
+        PlanNode writerNode = new TableWriterNode(
                 idAllocator.getNextId(),
-                plan.getRoot(),
+                source,
                 target,
-                plan.getOutputSymbols(),
+                symbols,
                 columnNames,
                 writerOutputs,
-                plan.getSampleWeight());
+                plan.getSampleWeight(),
+                partitionFunctionBinding);
 
         List<Symbol> outputs = ImmutableList.of(symbolAllocator.newSymbol("rows", BIGINT));
-
-        TableCommitNode commitNode = new TableCommitNode(
+        TableFinishNode commitNode = new TableFinishNode(
                 idAllocator.getNextId(),
                 writerNode,
                 target,
@@ -165,7 +236,7 @@ public class LogicalPlanner
         DeleteNode deleteNode = planner.planDelete(analysis.getDelete().get());
 
         List<Symbol> outputs = ImmutableList.of(symbolAllocator.newSymbol("rows", BIGINT));
-        TableCommitNode commitNode = new TableCommitNode(idAllocator.getNextId(), deleteNode, deleteNode.getTarget(), outputs);
+        TableFinishNode commitNode = new TableFinishNode(idAllocator.getNextId(), deleteNode, deleteNode.getTarget(), outputs);
 
         return new RelationPlan(commitNode, analysis.getOutputDescriptor(), commitNode.getOutputSymbols(), Optional.empty());
     }
@@ -176,7 +247,7 @@ public class LogicalPlanner
         ImmutableList.Builder<String> names = ImmutableList.builder();
 
         int columnNumber = 0;
-        TupleDescriptor outputDescriptor = analysis.getOutputDescriptor();
+        RelationType outputDescriptor = analysis.getOutputDescriptor();
         for (Field field : outputDescriptor.getVisibleFields()) {
             String name = field.getName().orElse("_col" + columnNumber);
             names.add(name);
@@ -197,7 +268,7 @@ public class LogicalPlanner
                 .process(analysis.getQuery(), null);
     }
 
-    private TableMetadata createTableMetadata(QualifiedTableName table, List<ColumnMetadata> columns, Map<String, Expression> propertyExpressions, boolean sampled)
+    private TableMetadata createTableMetadata(QualifiedObjectName table, List<ColumnMetadata> columns, Map<String, Expression> propertyExpressions, boolean sampled)
     {
         String owner = session.getUser();
 
@@ -219,13 +290,5 @@ public class LogicalPlanner
             columns.add(new ColumnMetadata(field.getName().get(), field.getType(), false));
         }
         return columns.build();
-    }
-
-    private static List<String> getVisibleColumnNames(TableMetadata tableMetadata)
-    {
-        return tableMetadata.getColumns().stream()
-                .filter(column -> !column.isHidden())
-                .map(ColumnMetadata::getName)
-                .collect(toImmutableList());
     }
 }

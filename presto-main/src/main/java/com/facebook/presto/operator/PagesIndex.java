@@ -39,9 +39,9 @@ import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.sql.gen.JoinCompiler.LookupSourceFactory;
 import static com.facebook.presto.util.ImmutableCollectors.toImmutableList;
 import static com.google.common.base.MoreObjects.toStringHelper;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static io.airlift.slice.SizeOf.sizeOf;
 import static io.airlift.units.DataSize.Unit.BYTE;
+import static java.util.Objects.requireNonNull;
 
 /**
  * PagesIndex a low-level data structure which contains the address of every value position of every channel.
@@ -74,7 +74,7 @@ public class PagesIndex
 
     public PagesIndex(List<Type> types, int expectedPositions)
     {
-        this.types = ImmutableList.copyOf(checkNotNull(types, "types is null"));
+        this.types = ImmutableList.copyOf(requireNonNull(types, "types is null"));
         this.valueAddresses = new LongArrayList(expectedPositions);
 
         //noinspection rawtypes
@@ -151,8 +151,6 @@ public class PagesIndex
         if (page.getPositionCount() == 0) {
             return;
         }
-
-        positionCount += page.getPositionCount();
 
         int pageIndex = (channels.length > 0) ? channels[0].size() : 0;
         for (int i = 0; i < channels.length; i++) {

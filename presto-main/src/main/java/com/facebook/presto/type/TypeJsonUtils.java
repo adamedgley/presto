@@ -16,7 +16,6 @@ package com.facebook.presto.type;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.BlockBuilderStatus;
-import com.facebook.presto.spi.block.VariableWidthBlockBuilder;
 import com.facebook.presto.spi.type.FixedWidthType;
 import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.spi.type.Type;
@@ -39,8 +38,8 @@ import java.util.Map;
 
 import static com.fasterxml.jackson.core.JsonFactory.Feature.CANONICALIZE_FIELD_NAMES;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
+import static java.util.Objects.requireNonNull;
 
 public final class TypeJsonUtils
 {
@@ -72,7 +71,7 @@ public final class TypeJsonUtils
             throws IOException
     {
         // checking whether type is JsonType needs to go before null check because
-        // cast('[null]', array<json>) should be casted to a single item array containing a json document "null" instead of sql null.
+        // cast('[null]', array(json)) should be casted to a single item array containing a json document "null" instead of sql null.
         if (type instanceof JsonType) {
             return OBJECT_MAPPER.writeValueAsString(parser.readValueAsTree());
         }
@@ -129,7 +128,7 @@ public final class TypeJsonUtils
             blockBuilder = type.createBlockBuilder(new BlockBuilderStatus(), 1);
         }
         else {
-            blockBuilder = type.createBlockBuilder(new BlockBuilderStatus(), 1, checkNotNull(sliceValue, "sliceValue is null").length());
+            blockBuilder = type.createBlockBuilder(new BlockBuilderStatus(), 1, requireNonNull(sliceValue, "sliceValue is null").length());
         }
 
         if (type.getJavaType() == boolean.class) {
@@ -142,7 +141,7 @@ public final class TypeJsonUtils
             type.writeDouble(blockBuilder, getDoubleValue(parser));
         }
         else if (type.getJavaType() == Slice.class) {
-            type.writeSlice(blockBuilder, checkNotNull(sliceValue, "sliceValue is null"));
+            type.writeSlice(blockBuilder, requireNonNull(sliceValue, "sliceValue is null"));
         }
         return type.getObjectValue(session, blockBuilder.build(), 0);
     }
@@ -220,28 +219,28 @@ public final class TypeJsonUtils
             blockBuilder.appendNull();
         }
         else if (type.getTypeSignature().getBase().equals(StandardTypes.ARRAY) && element instanceof Iterable<?>) {
-            BlockBuilder subBlockBuilder = ((ArrayType) type).getElementType().createBlockBuilder(new BlockBuilderStatus(), TypeUtils.EXPECTED_ARRAY_SIZE);
+            BlockBuilder subBlockBuilder = blockBuilder.beginBlockEntry();
             for (Object subElement : (Iterable<?>) element) {
                 appendToBlockBuilder(type.getTypeParameters().get(0), subElement, subBlockBuilder);
             }
-            type.writeObject(blockBuilder, subBlockBuilder);
+            blockBuilder.closeEntry();
         }
         else if (type.getTypeSignature().getBase().equals(StandardTypes.ROW) && element instanceof Iterable<?>) {
-            BlockBuilder subBlockBuilder = new VariableWidthBlockBuilder(new BlockBuilderStatus(), TypeUtils.EXPECTED_ARRAY_SIZE);
+            BlockBuilder subBlockBuilder = blockBuilder.beginBlockEntry();
             int field = 0;
             for (Object subElement : (Iterable<?>) element) {
                 appendToBlockBuilder(type.getTypeParameters().get(field), subElement, subBlockBuilder);
                 field++;
             }
-            type.writeObject(blockBuilder, subBlockBuilder);
+            blockBuilder.closeEntry();
         }
         else if (type.getTypeSignature().getBase().equals(StandardTypes.MAP) && element instanceof Map<?, ?>) {
-            BlockBuilder subBlockBuilder = new VariableWidthBlockBuilder(new BlockBuilderStatus(), TypeUtils.EXPECTED_ARRAY_SIZE);
+            BlockBuilder subBlockBuilder = blockBuilder.beginBlockEntry();
             for (Map.Entry<?, ?> entry : ((Map<?, ?>) element).entrySet()) {
                 appendToBlockBuilder(type.getTypeParameters().get(0), entry.getKey(), subBlockBuilder);
                 appendToBlockBuilder(type.getTypeParameters().get(1), entry.getValue(), subBlockBuilder);
             }
-            type.writeObject(blockBuilder, subBlockBuilder);
+            blockBuilder.closeEntry();
         }
 
         else if (javaType == boolean.class) {

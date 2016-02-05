@@ -34,8 +34,8 @@ import javax.annotation.Nullable;
 
 import java.net.URI;
 import java.util.List;
-import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicLong;
@@ -43,7 +43,6 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static com.facebook.presto.util.Failures.toFailures;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.CompletableFuture.completedFuture;
 
@@ -52,7 +51,7 @@ public class SqlTask
     private static final Logger log = Logger.get(SqlTask.class);
 
     private final TaskId taskId;
-    private final String nodeInstanceId;
+    private final String taskInstanceId;
     private final URI location;
     private final TaskStateMachine taskStateMachine;
     private final SharedBuffer sharedBuffer;
@@ -67,7 +66,6 @@ public class SqlTask
 
     public SqlTask(
             TaskId taskId,
-            String nodeInstanceId,
             URI location,
             QueryContext queryContext,
             SqlTaskExecutionFactory sqlTaskExecutionFactory,
@@ -75,16 +73,16 @@ public class SqlTask
             final Function<SqlTask, ?> onDone,
             DataSize maxBufferSize)
     {
-        this.taskId = checkNotNull(taskId, "taskId is null");
-        this.nodeInstanceId = checkNotNull(nodeInstanceId, "nodeInstanceId is null");
-        this.location = checkNotNull(location, "location is null");
+        this.taskId = requireNonNull(taskId, "taskId is null");
+        this.taskInstanceId = UUID.randomUUID().toString();
+        this.location = requireNonNull(location, "location is null");
         this.queryContext = requireNonNull(queryContext, "queryContext is null");
-        this.sqlTaskExecutionFactory = checkNotNull(sqlTaskExecutionFactory, "sqlTaskExecutionFactory is null");
-        checkNotNull(taskNotificationExecutor, "taskNotificationExecutor is null");
-        checkNotNull(onDone, "onDone is null");
-        checkNotNull(maxBufferSize, "maxBufferSize is null");
+        this.sqlTaskExecutionFactory = requireNonNull(sqlTaskExecutionFactory, "sqlTaskExecutionFactory is null");
+        requireNonNull(taskNotificationExecutor, "taskNotificationExecutor is null");
+        requireNonNull(onDone, "onDone is null");
+        requireNonNull(maxBufferSize, "maxBufferSize is null");
 
-        sharedBuffer = new SharedBuffer(taskId, taskNotificationExecutor, maxBufferSize, new UpdateSystemMemory(queryContext));
+        sharedBuffer = new SharedBuffer(taskId, taskInstanceId, taskNotificationExecutor, maxBufferSize, new UpdateSystemMemory(queryContext));
         taskStateMachine = new TaskStateMachine(taskId, taskNotificationExecutor);
         taskStateMachine.addStateChangeListener(new StateChangeListener<TaskState>()
         {
@@ -208,7 +206,7 @@ public class SqlTask
 
         return new TaskInfo(
                 taskStateMachine.getTaskId(),
-                Optional.of(nodeInstanceId),
+                taskInstanceId,
                 versionNumber,
                 state,
                 location,
@@ -221,7 +219,7 @@ public class SqlTask
 
     public CompletableFuture<TaskInfo> getTaskInfo(TaskState callersCurrentState)
     {
-        checkNotNull(callersCurrentState, "callersCurrentState is null");
+        requireNonNull(callersCurrentState, "callersCurrentState is null");
 
         // If the caller's current state is already done, just return the current
         // state of this task as it will either be done or possibly still running
@@ -272,7 +270,7 @@ public class SqlTask
 
     public CompletableFuture<BufferResult> getTaskResults(TaskId outputName, long startingSequenceId, DataSize maxSize)
     {
-        checkNotNull(outputName, "outputName is null");
+        requireNonNull(outputName, "outputName is null");
         checkArgument(maxSize.toBytes() > 0, "maxSize must be at least 1 byte");
 
         return sharedBuffer.get(outputName, startingSequenceId, maxSize);
@@ -280,7 +278,7 @@ public class SqlTask
 
     public TaskInfo abortTaskResults(TaskId outputId)
     {
-        checkNotNull(outputId, "outputId is null");
+        requireNonNull(outputId, "outputId is null");
 
         log.debug("Aborting task %s output %s", taskId, outputId);
         sharedBuffer.abort(outputId);
@@ -290,7 +288,7 @@ public class SqlTask
 
     public void failed(Throwable cause)
     {
-        checkNotNull(cause, "cause is null");
+        requireNonNull(cause, "cause is null");
 
         taskStateMachine.failed(cause);
     }
@@ -328,7 +326,7 @@ public class SqlTask
 
         private TaskHolder(SqlTaskExecution taskExecution)
         {
-            this.taskExecution = checkNotNull(taskExecution, "taskExecution is null");
+            this.taskExecution = requireNonNull(taskExecution, "taskExecution is null");
             this.finalTaskInfo = null;
             this.finalIoStats = null;
         }
@@ -336,8 +334,8 @@ public class SqlTask
         private TaskHolder(TaskInfo finalTaskInfo, SqlTaskIoStats finalIoStats)
         {
             this.taskExecution = null;
-            this.finalTaskInfo = checkNotNull(finalTaskInfo, "finalTaskInfo is null");
-            this.finalIoStats = checkNotNull(finalIoStats, "finalIoStats is null");
+            this.finalTaskInfo = requireNonNull(finalTaskInfo, "finalTaskInfo is null");
+            this.finalIoStats = requireNonNull(finalIoStats, "finalIoStats is null");
         }
 
         public boolean isFinished()
@@ -371,5 +369,10 @@ public class SqlTask
             TaskContext taskContext = taskExecution.getTaskContext();
             return new SqlTaskIoStats(taskContext.getInputDataSize(), taskContext.getInputPositions(), taskContext.getOutputDataSize(), taskContext.getOutputPositions());
         }
+    }
+
+    public void addStateChangeListener(StateChangeListener<TaskState> stateChangeListener)
+    {
+        taskStateMachine.addStateChangeListener(stateChangeListener);
     }
 }

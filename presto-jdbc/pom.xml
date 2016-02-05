@@ -5,7 +5,7 @@
     <parent>
         <groupId>com.facebook.presto</groupId>
         <artifactId>presto-root</artifactId>
-        <version>0.116-SNAPSHOT</version>
+        <version>0.137-SNAPSHOT</version>
     </parent>
 
     <artifactId>presto-jdbc</artifactId>
@@ -118,6 +118,12 @@
         <dependency>
             <groupId>com.facebook.presto</groupId>
             <artifactId>presto-tpch</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>com.facebook.presto</groupId>
+            <artifactId>presto-blackhole</artifactId>
             <scope>test</scope>
         </dependency>
 
@@ -240,6 +246,12 @@
                                     <artifact>org.eclipse.jetty:*</artifact>
                                     <excludes>
                                         <exclude>about.html</exclude>
+                                    </excludes>
+                                </filter>
+                                <filter>
+                                    <artifact>net.sf.opencsv:opencsv</artifact>
+                                    <excludes>
+                                        <exclude>**</exclude>
                                     </excludes>
                                 </filter>
                             </filters>

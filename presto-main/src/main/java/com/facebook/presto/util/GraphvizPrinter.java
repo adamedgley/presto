@@ -18,6 +18,7 @@ import com.facebook.presto.sql.planner.SubPlan;
 import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.plan.AggregationNode;
 import com.facebook.presto.sql.planner.plan.DistinctLimitNode;
+import com.facebook.presto.sql.planner.plan.EnforceSingleRowNode;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
 import com.facebook.presto.sql.planner.plan.FilterNode;
 import com.facebook.presto.sql.planner.plan.IndexJoinNode;
@@ -35,7 +36,7 @@ import com.facebook.presto.sql.planner.plan.RowNumberNode;
 import com.facebook.presto.sql.planner.plan.SampleNode;
 import com.facebook.presto.sql.planner.plan.SemiJoinNode;
 import com.facebook.presto.sql.planner.plan.SortNode;
-import com.facebook.presto.sql.planner.plan.TableCommitNode;
+import com.facebook.presto.sql.planner.plan.TableFinishNode;
 import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.facebook.presto.sql.planner.plan.TableWriterNode;
 import com.facebook.presto.sql.planner.plan.TopNNode;
@@ -50,7 +51,6 @@ import com.facebook.presto.sql.tree.FunctionCall;
 import com.facebook.presto.sql.tree.QualifiedNameReference;
 import com.google.common.base.Joiner;
 import com.google.common.base.Preconditions;
-import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Maps;
@@ -62,7 +62,6 @@ import java.util.List;
 import java.util.Map;
 
 import static com.facebook.presto.sql.planner.plan.ExchangeNode.Type.REPARTITION;
-import static com.facebook.presto.sql.planner.plan.ExchangeNode.Type.REPARTITION_WITH_NULL_REPLICATION;
 import static com.google.common.collect.Maps.immutableEnumMap;
 import static java.lang.String.format;
 
@@ -177,7 +176,7 @@ public final class GraphvizPrinter
                 .append(" {")
                 .append('\n');
 
-        output.append(format("label = \"%s\"", fragment.getDistribution()))
+        output.append(format("label = \"%s\"", fragment.getPartitioning()))
                 .append('\n');
 
         PlanNode plan = fragment.getRoot();
@@ -218,7 +217,7 @@ public final class GraphvizPrinter
         }
 
         @Override
-        public Void visitTableCommit(TableCommitNode node, Void context)
+        public Void visitTableFinish(TableFinishNode node, Void context)
         {
             printNode(node, format("TableCommit[%s]", Joiner.on(", ").join(node.getOutputSymbols())), NODE_COLORS.get(NodeType.TABLE_COMMIT));
             return node.getSource().accept(this, context);
@@ -295,8 +294,8 @@ public final class GraphvizPrinter
         public Void visitExchange(ExchangeNode node, Void context)
         {
             List<Symbol> symbols = node.getOutputSymbols();
-            if (node.getType() == REPARTITION || node.getType() == REPARTITION_WITH_NULL_REPLICATION) {
-                symbols = node.getPartitionKeys().orElseGet(() -> ImmutableList.of(new Symbol("(absent)")));
+            if (node.getType() == REPARTITION) {
+                symbols = node.getPartitionFunction().getPartitioningColumns();
             }
             String columns = Joiner.on(", ").join(symbols);
             printNode(node, format("ExchangeNode[%s]", node.getType()), columns, NODE_COLORS.get(NodeType.EXCHANGE));
@@ -400,6 +399,13 @@ public final class GraphvizPrinter
         public Void visitValues(ValuesNode node, Void context)
         {
             printNode(node, "Values", NODE_COLORS.get(NodeType.TABLESCAN));
+            return null;
+        }
+
+        @Override
+        public Void visitEnforceSingleRow(EnforceSingleRowNode node, Void context)
+        {
+            printNode(node, "Scalar", NODE_COLORS.get(NodeType.PROJECT));
             return null;
         }
 

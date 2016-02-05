@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.type;
 
+import com.facebook.presto.operator.scalar.CombineHashFunction;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.block.ArrayBlockBuilder;
 import com.facebook.presto.spi.block.Block;
@@ -21,17 +22,16 @@ import com.facebook.presto.spi.block.BlockBuilderStatus;
 import com.facebook.presto.spi.type.AbstractType;
 import com.facebook.presto.spi.type.Type;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.Lists;
 import io.airlift.slice.Slice;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.Objects;
 
+import static com.facebook.presto.spi.type.StandardTypes.ARRAY;
 import static com.facebook.presto.type.TypeUtils.checkElementNotNull;
 import static com.facebook.presto.type.TypeUtils.parameterizedTypeName;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class ArrayType
         extends AbstractType
@@ -41,8 +41,8 @@ public class ArrayType
 
     public ArrayType(Type elementType)
     {
-        super(parameterizedTypeName("array", elementType.getTypeSignature()), Block.class);
-        this.elementType = checkNotNull(elementType, "elementType is null");
+        super(parameterizedTypeName(ARRAY, elementType.getTypeSignature()), Block.class);
+        this.elementType = requireNonNull(elementType, "elementType is null");
     }
 
     public Type getElementType()
@@ -65,24 +65,43 @@ public class ArrayType
     @Override
     public boolean equalTo(Block leftBlock, int leftPosition, Block rightBlock, int rightPosition)
     {
-        return compareTo(leftBlock, leftPosition, rightBlock, rightPosition) == 0;
+        Block leftArray = leftBlock.getObject(leftPosition, Block.class);
+        Block rightArray = rightBlock.getObject(rightPosition, Block.class);
+
+        if (leftArray.getPositionCount() != rightArray.getPositionCount()) {
+            return false;
+        }
+
+        for (int i = 0; i < leftArray.getPositionCount(); i++) {
+            checkElementNotNull(leftArray.isNull(i), ARRAY_NULL_ELEMENT_MSG);
+            checkElementNotNull(rightArray.isNull(i), ARRAY_NULL_ELEMENT_MSG);
+            if (!elementType.equalTo(leftArray, i, rightArray, i)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     @Override
     public int hash(Block block, int position)
     {
         Block array = getObject(block, position);
-        List<Integer> hashArray = new ArrayList<>(array.getPositionCount());
+        int hash = 0;
         for (int i = 0; i < array.getPositionCount(); i++) {
             checkElementNotNull(array.isNull(i), ARRAY_NULL_ELEMENT_MSG);
-            hashArray.add(elementType.hash(array, i));
+            hash = (int) CombineHashFunction.getHash(hash, elementType.hash(array, i));
         }
-        return Objects.hash(hashArray);
+        return hash;
     }
 
     @Override
     public int compareTo(Block leftBlock, int leftPosition, Block rightBlock, int rightPosition)
     {
+        if (!elementType.isOrderable()) {
+            throw new UnsupportedOperationException(getTypeSignature() + " type is not orderable");
+        }
+
         Block leftArray = leftBlock.getObject(leftPosition, Block.class);
         Block rightArray = rightBlock.getObject(rightPosition, Block.class);
 
@@ -114,7 +133,7 @@ public class ArrayType
 
         Block arrayBlock = block.getObject(position, Block.class);
 
-        List<Object> values = Lists.newArrayListWithCapacity(arrayBlock.getPositionCount());
+        List<Object> values = new ArrayList<>(arrayBlock.getPositionCount());
 
         for (int i = 0; i < arrayBlock.getPositionCount(); i++) {
             values.add(elementType.getObjectValue(session, arrayBlock, i));
@@ -186,6 +205,6 @@ public class ArrayType
     @Override
     public String getDisplayName()
     {
-        return "array<" + elementType.getDisplayName() + ">";
+        return ARRAY + "(" + elementType.getDisplayName() + ")";
     }
 }

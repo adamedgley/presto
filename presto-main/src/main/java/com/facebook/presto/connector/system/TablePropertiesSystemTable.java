@@ -21,7 +21,8 @@ import com.facebook.presto.spi.InMemoryRecordSet.Builder;
 import com.facebook.presto.spi.RecordCursor;
 import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.SystemTable;
-import com.facebook.presto.spi.TupleDomain;
+import com.facebook.presto.spi.connector.ConnectorTransactionHandle;
+import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.session.PropertyMetadata;
 
 import javax.inject.Inject;
@@ -31,9 +32,10 @@ import java.util.Map.Entry;
 import java.util.TreeMap;
 
 import static com.facebook.presto.metadata.MetadataUtil.TableMetadataBuilder.tableMetadataBuilder;
+import static com.facebook.presto.spi.SystemTable.Distribution.SINGLE_COORDINATOR;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.google.common.base.MoreObjects.firstNonNull;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class TablePropertiesSystemTable
         implements SystemTable
@@ -52,13 +54,13 @@ public class TablePropertiesSystemTable
     @Inject
     public TablePropertiesSystemTable(Metadata metadata)
     {
-        this.metadata = checkNotNull(metadata);
+        this.metadata = requireNonNull(metadata);
     }
 
     @Override
-    public boolean isDistributed()
+    public Distribution getDistribution()
     {
-        return false;
+        return SINGLE_COORDINATOR;
     }
 
     @Override
@@ -68,7 +70,7 @@ public class TablePropertiesSystemTable
     }
 
     @Override
-    public RecordCursor cursor(ConnectorSession session, TupleDomain<Integer> constraint)
+    public RecordCursor cursor(ConnectorTransactionHandle transactionHandle, ConnectorSession session, TupleDomain<Integer> constraint)
     {
         Builder table = InMemoryRecordSet.builder(TABLE_PROPERTIES_TABLE);
         Map<String, Map<String, PropertyMetadata<?>>> tableProperties = new TreeMap<>(metadata.getTablePropertyManager().getAllTableProperties());

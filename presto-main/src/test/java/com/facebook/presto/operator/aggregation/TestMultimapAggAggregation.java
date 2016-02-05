@@ -22,17 +22,18 @@ import com.facebook.presto.type.MapType;
 import com.facebook.presto.type.RowType;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.Maps;
 import org.testng.annotations.Test;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+import static com.facebook.presto.metadata.FunctionKind.AGGREGATE;
 import static com.facebook.presto.metadata.MetadataManager.createTestMetadataManager;
 import static com.facebook.presto.operator.aggregation.AggregationTestUtils.assertAggregation;
-import static com.facebook.presto.operator.aggregation.MultimapAggregation.NAME;
+import static com.facebook.presto.operator.aggregation.MultimapAggregationFunction.NAME;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
@@ -117,10 +118,10 @@ public class TestMultimapAggAggregation
         checkState(expectedKeys.size() == expectedValues.size(), "expectedKeys and expectedValues should have equal size");
 
         MapType mapType = new MapType(keyType, new ArrayType(valueType));
-        Signature signature = new Signature(NAME, mapType.getTypeSignature(), keyType.getTypeSignature(), valueType.getTypeSignature());
-        InternalAggregationFunction aggFunc = metadata.getExactFunction(signature).getAggregationFunction();
+        Signature signature = new Signature(NAME, AGGREGATE, mapType.getTypeSignature(), keyType.getTypeSignature(), valueType.getTypeSignature());
+        InternalAggregationFunction aggFunc = metadata.getFunctionRegistry().getAggregateFunctionImplementation(signature);
 
-        Map<K, List<V>> map = Maps.newHashMap();
+        Map<K, List<V>> map = new HashMap<>();
         for (int i = 0; i < expectedKeys.size(); i++) {
             if (!map.containsKey(expectedKeys.get(i))) {
                 map.put(expectedKeys.get(i), new ArrayList<>());
@@ -133,6 +134,6 @@ public class TestMultimapAggAggregation
             builder.row(expectedKeys.get(i), expectedValues.get(i));
         }
 
-        assertAggregation(aggFunc, 1.0, map.isEmpty() ? null : map, builder.build());
+        assertAggregation(aggFunc, 1.0, map.isEmpty() ? null : map, builder.build().getBlocks());
     }
 }

@@ -15,19 +15,26 @@ package com.facebook.presto.testing;
 
 import com.facebook.presto.Session;
 import com.facebook.presto.Session.SessionBuilder;
+import com.facebook.presto.execution.QueryIdGenerator;
 import com.facebook.presto.metadata.SessionPropertyManager;
+import com.facebook.presto.spi.security.Identity;
+
+import java.util.Optional;
 
 import static com.facebook.presto.spi.type.TimeZoneKey.UTC_KEY;
 import static java.util.Locale.ENGLISH;
 
 public final class TestingSession
 {
+    private static final QueryIdGenerator queryIdGenerator = new QueryIdGenerator();
+
     private TestingSession() {}
 
     public static SessionBuilder testSessionBuilder()
     {
         return Session.builder(new SessionPropertyManager())
-                .setUser("user")
+                .setQueryId(queryIdGenerator.createNextQueryId())
+                .setIdentity(new Identity("user", Optional.empty()))
                 .setSource("test")
                 .setCatalog("catalog")
                 .setSchema("schema")

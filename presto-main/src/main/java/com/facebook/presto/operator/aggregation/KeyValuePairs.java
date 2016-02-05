@@ -22,12 +22,11 @@ import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.type.ArrayType;
 import com.facebook.presto.util.array.ObjectBigArray;
 import com.google.common.collect.ImmutableList;
-import com.google.common.primitives.Ints;
 import org.openjdk.jol.info.ClassLayout;
 
 import static com.facebook.presto.spi.StandardErrorCode.INTERNAL_ERROR;
 import static com.facebook.presto.type.TypeUtils.expectedValueSize;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class KeyValuePairs
 {
@@ -51,8 +50,8 @@ public class KeyValuePairs
 
     public KeyValuePairs(Type keyType, Type valueType, boolean isMultiValue)
     {
-        this.keyType = checkNotNull(keyType, "keyType is null");
-        this.valueType = checkNotNull(valueType, "valueType is null");
+        this.keyType = requireNonNull(keyType, "keyType is null");
+        this.valueType = requireNonNull(valueType, "valueType is null");
         this.keySet = new TypedSet(keyType, EXPECTED_ENTRIES);
         keyBlockBuilder = this.keyType.createBlockBuilder(new BlockBuilderStatus(), EXPECTED_ENTRIES, expectedValueSize(keyType, EXPECTED_ENTRY_SIZE));
         valueBlockBuilder = this.valueType.createBlockBuilder(new BlockBuilderStatus(), EXPECTED_ENTRIES, expectedValueSize(valueType, EXPECTED_ENTRY_SIZE));
@@ -63,7 +62,7 @@ public class KeyValuePairs
     public KeyValuePairs(Block serialized, Type keyType, Type valueType, boolean isMultiValue)
     {
         this(keyType, valueType, isMultiValue);
-        deserialize(checkNotNull(serialized, "serialized is null"));
+        deserialize(requireNonNull(serialized, "serialized is null"));
     }
 
     public Block getKeys()
@@ -96,7 +95,7 @@ public class KeyValuePairs
     }
 
     /**
-     * Serialize as a map: map<key, value>
+     * Serialize as a map: map(key, value)
      */
     public Block toMapNativeEncoding()
     {
@@ -108,7 +107,7 @@ public class KeyValuePairs
     }
 
     /**
-     * Serialize as a multimap: map<key, array<value>>, each key can be associated with multiple values
+     * Serialize as a multimap: map(key, array(value)), each key can be associated with multiple values
      */
     public Block toMultimapNativeEncoding()
     {
@@ -137,7 +136,7 @@ public class KeyValuePairs
         // Write keys and value arrays into one Block
         Block distinctKeys = distinctKeyBlockBuilder.build();
         Type valueArrayType = new ArrayType(valueType);
-        BlockBuilder multimapBlockBuilder = new InterleavedBlockBuilder(ImmutableList.of(keyType, valueArrayType), new BlockBuilderStatus(), distinctKeyBlockBuilder.getSizeInBytes() + Ints.checkedCast(valueArrayBlockBuilders.sizeOf()));
+        BlockBuilder multimapBlockBuilder = new InterleavedBlockBuilder(ImmutableList.of(keyType, valueArrayType), new BlockBuilderStatus(), distinctKeyBlockBuilder.getPositionCount());
         for (int i = 0; i < distinctKeys.getPositionCount(); i++) {
             keyType.appendTo(distinctKeys, i, multimapBlockBuilder);
             valueArrayType.writeObject(multimapBlockBuilder, valueArrayBlockBuilders.get(i).build());
@@ -151,7 +150,7 @@ public class KeyValuePairs
         long size = INSTANCE_SIZE;
         size += keyBlockBuilder.getRetainedSizeInBytes();
         size += valueBlockBuilder.getRetainedSizeInBytes();
-        size += keySet.getEstimatedSize();
+        size += keySet.getRetainedSizeInBytes();
         return size;
     }
 

@@ -13,23 +13,25 @@
  */
 package com.facebook.presto.operator.aggregation;
 
-import com.facebook.presto.ExceededMemoryLimitException;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.BlockBuilderStatus;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.util.array.IntBigArray;
 import io.airlift.units.DataSize;
+import org.openjdk.jol.info.ClassLayout;
 
+import static com.facebook.presto.ExceededMemoryLimitException.exceededLocalLimit;
 import static com.facebook.presto.type.TypeUtils.hashPosition;
 import static com.facebook.presto.type.TypeUtils.positionEqualsPosition;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
 import static it.unimi.dsi.fastutil.HashCommon.arraySize;
+import static java.util.Objects.requireNonNull;
 
 public class TypedSet
 {
+    private static final int INSTANCE_SIZE = ClassLayout.parseClass(TypedSet.class).instanceSize();
     private static final float FILL_RATIO = 0.75f;
     private static final long FOUR_MEGABYTES = new DataSize(4, MEGABYTE).toBytes();
 
@@ -46,7 +48,7 @@ public class TypedSet
     public TypedSet(Type elementType, int expectedSize)
     {
         checkArgument(expectedSize > 0, "expectedSize must be > 0");
-        this.elementType = checkNotNull(elementType, "elementType must not be null");
+        this.elementType = requireNonNull(elementType, "elementType must not be null");
         this.elementBlock = elementType.createBlockBuilder(new BlockBuilderStatus(), expectedSize);
 
         int hashSize = arraySize(expectedSize, FILL_RATIO);
@@ -61,14 +63,14 @@ public class TypedSet
         this.containsNullElement = false;
     }
 
-    public long getEstimatedSize()
+    public long getRetainedSizeInBytes()
     {
-        return elementBlock.getSizeInBytes() + blockPositionByHash.sizeOf();
+        return INSTANCE_SIZE + elementBlock.getRetainedSizeInBytes() + blockPositionByHash.sizeOf();
     }
 
     public boolean contains(Block block, int position)
     {
-        checkNotNull(block, "block must not be null");
+        requireNonNull(block, "block must not be null");
         checkArgument(position >= 0, "position must be >= 0");
 
         if (block.isNull(position)) {
@@ -81,7 +83,7 @@ public class TypedSet
 
     public void add(Block block, int position)
     {
-        checkNotNull(block, "block must not be null");
+        requireNonNull(block, "block must not be null");
         checkArgument(position >= 0, "position must be >= 0");
 
         if (block.isNull(position)) {
@@ -130,7 +132,7 @@ public class TypedSet
     {
         elementType.appendTo(block, position, elementBlock);
         if (elementBlock.getSizeInBytes() > FOUR_MEGABYTES) {
-            throw new ExceededMemoryLimitException(new DataSize(4, MEGABYTE));
+            throw exceededLocalLimit(new DataSize(4, MEGABYTE));
         }
         blockPositionByHash.set(hashPosition, elementBlock.getPositionCount() - 1);
 

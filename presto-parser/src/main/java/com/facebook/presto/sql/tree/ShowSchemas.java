@@ -13,10 +13,11 @@
  */
 package com.facebook.presto.sql.tree;
 
+import java.util.Objects;
 import java.util.Optional;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class ShowSchemas
         extends Statement
@@ -25,7 +26,18 @@ public class ShowSchemas
 
     public ShowSchemas(Optional<String> catalog)
     {
-        this.catalog = checkNotNull(catalog, "catalog is null");
+        this(Optional.empty(), catalog);
+    }
+
+    public ShowSchemas(NodeLocation location, Optional<String> catalog)
+    {
+        this(Optional.of(location), catalog);
+    }
+
+    private ShowSchemas(Optional<NodeLocation> location, Optional<String> catalog)
+    {
+        super(location);
+        this.catalog = requireNonNull(catalog, "catalog is null");
     }
 
     public Optional<String> getCatalog()
@@ -42,7 +54,7 @@ public class ShowSchemas
     @Override
     public int hashCode()
     {
-        return 0;
+        return catalog.hashCode();
     }
 
     @Override
@@ -51,12 +63,18 @@ public class ShowSchemas
         if (this == obj) {
             return true;
         }
-        return (obj != null) && (getClass() == obj.getClass());
+        if ((obj == null) || (getClass() != obj.getClass())) {
+            return false;
+        }
+        ShowSchemas o = (ShowSchemas) obj;
+        return Objects.equals(catalog, o.catalog);
     }
 
     @Override
     public String toString()
     {
-        return toStringHelper(this).toString();
+        return toStringHelper(this)
+                .add("catalog", catalog)
+                .toString();
     }
 }

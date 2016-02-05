@@ -14,7 +14,9 @@
 package com.facebook.presto.server;
 
 import com.facebook.presto.Session;
+import com.facebook.presto.execution.QueryId;
 import com.facebook.presto.metadata.SessionPropertyManager;
+import com.facebook.presto.security.AllowAllAccessControl;
 import com.google.common.collect.ImmutableListMultimap;
 import com.google.common.collect.ImmutableMap;
 import org.testng.annotations.Test;
@@ -56,12 +58,13 @@ public class TestResourceUtil
                         .build(),
                 "testRemote");
 
-        Session session = createSessionForRequest(request, new SessionPropertyManager());
+        Session session = createSessionForRequest(request, new AllowAllAccessControl(), new SessionPropertyManager(), new QueryId("test_query_id"));
 
+        assertEquals(session.getQueryId(), new QueryId("test_query_id"));
         assertEquals(session.getUser(), "testUser");
         assertEquals(session.getSource().get(), "testSource");
-        assertEquals(session.getCatalog(), "testCatalog");
-        assertEquals(session.getSchema(), "testSchema");
+        assertEquals(session.getCatalog().get(), "testCatalog");
+        assertEquals(session.getSchema().get(), "testSchema");
         assertEquals(session.getLocale(), Locale.TAIWAN);
         assertEquals(session.getTimeZoneKey(), getTimeZoneKey("Asia/Taipei"));
         assertEquals(session.getRemoteUserAddress().get(), "testRemote");

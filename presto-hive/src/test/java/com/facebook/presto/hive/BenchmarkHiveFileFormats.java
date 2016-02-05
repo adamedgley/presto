@@ -18,12 +18,14 @@ import com.facebook.presto.hive.orc.DwrfPageSourceFactory;
 import com.facebook.presto.hive.orc.DwrfRecordCursorProvider;
 import com.facebook.presto.hive.orc.OrcPageSourceFactory;
 import com.facebook.presto.hive.orc.OrcRecordCursorProvider;
+import com.facebook.presto.hive.parquet.ParquetRecordCursorProvider;
 import com.facebook.presto.hive.rcfile.RcFilePageSourceFactory;
 import com.facebook.presto.spi.ConnectorPageSource;
 import com.facebook.presto.spi.HostAddress;
 import com.facebook.presto.spi.Page;
-import com.facebook.presto.spi.TupleDomain;
 import com.facebook.presto.spi.block.Block;
+import com.facebook.presto.spi.predicate.NullableValue;
+import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.type.TypeRegistry;
 import com.google.common.base.Joiner;
 import com.google.common.base.Throwables;
@@ -72,7 +74,6 @@ import java.util.List;
 import java.util.Properties;
 
 import static com.facebook.presto.hive.HiveTestUtils.SESSION;
-import static com.facebook.presto.hive.HiveType.getType;
 import static com.facebook.presto.hive.HiveUtil.setReadColumns;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
@@ -576,7 +577,6 @@ public final class BenchmarkHiveFileFormats
             }
         }
         System.out.println();
-
     }
 
     private static long benchmarkReadNone(
@@ -1466,7 +1466,7 @@ public final class BenchmarkHiveFileFormats
                     split.getSchema(),
                     ALL_COLUMNS,
                     split.getPartitionKeys(),
-                    TupleDomain.withFixedValues(ImmutableMap.<HiveColumnHandle, Comparable<?>>of(Iterables.getOnlyElement(getHiveColumnHandles(ORDER_KEY)), FILTER_ORDER_KEY_ID)),
+                    TupleDomain.fromFixedValues(ImmutableMap.of(Iterables.getOnlyElement(getHiveColumnHandles(ORDER_KEY)), NullableValue.of(BIGINT, FILTER_ORDER_KEY_ID))),
                     DateTimeZone.UTC).get();
 
             while (!pageSource.isFinished()) {
@@ -1684,11 +1684,11 @@ public final class BenchmarkHiveFileFormats
         for (TpchColumn<?> column : tpchColumns) {
             int ordinal = COLUMNS.indexOf(column);
             ObjectInspector inspector = getObjectInspector(column);
+            HiveType hiveType = HiveType.valueOf(inspector.getTypeName());
             columns.add(new HiveColumnHandle("test",
                     column.getColumnName(),
-                    ordinal,
-                    HiveType.getHiveType(inspector),
-                    getType(inspector, TYPE_MANAGER).getTypeSignature(),
+                    hiveType,
+                    hiveType.getTypeSignature(),
                     ordinal,
                     false));
         }

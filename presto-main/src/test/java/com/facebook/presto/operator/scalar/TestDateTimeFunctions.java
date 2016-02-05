@@ -37,7 +37,6 @@ import java.util.Locale;
 import java.util.TimeZone;
 import java.util.concurrent.TimeUnit;
 
-import static com.facebook.presto.testing.TestingSession.testSessionBuilder;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
 import static com.facebook.presto.spi.type.TimeWithTimeZoneType.TIME_WITH_TIME_ZONE;
@@ -45,6 +44,7 @@ import static com.facebook.presto.spi.type.TimeZoneKey.getTimeZoneKey;
 import static com.facebook.presto.spi.type.TimeZoneKey.getTimeZoneKeyForOffset;
 import static com.facebook.presto.spi.type.TimestampWithTimeZoneType.TIMESTAMP_WITH_TIME_ZONE;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
+import static com.facebook.presto.testing.TestingSession.testSessionBuilder;
 import static com.facebook.presto.util.DateTimeZoneIndex.getDateTimeZone;
 import static java.util.Objects.requireNonNull;
 import static org.joda.time.DateTimeUtils.getInstantChronology;
@@ -478,6 +478,7 @@ public class TestDateTimeFunctions
     @Test
     public void testAddFieldToTimestamp()
     {
+        assertFunction("date_add('millisecond', 3, " + TIMESTAMP_LITERAL + ")", TimestampType.TIMESTAMP, toTimestamp(TIMESTAMP.plusMillis(3)));
         assertFunction("date_add('second', 3, " + TIMESTAMP_LITERAL + ")", TimestampType.TIMESTAMP, toTimestamp(TIMESTAMP.plusSeconds(3)));
         assertFunction("date_add('minute', 3, " + TIMESTAMP_LITERAL + ")", TimestampType.TIMESTAMP, toTimestamp(TIMESTAMP.plusMinutes(3)));
         assertFunction("date_add('hour', 3, " + TIMESTAMP_LITERAL + ")", TimestampType.TIMESTAMP, toTimestamp(TIMESTAMP.plusHours(3)));
@@ -487,6 +488,7 @@ public class TestDateTimeFunctions
         assertFunction("date_add('quarter', 3, " + TIMESTAMP_LITERAL + ")", TimestampType.TIMESTAMP, toTimestamp(TIMESTAMP.plusMonths(3 * 3)));
         assertFunction("date_add('year', 3, " + TIMESTAMP_LITERAL + ")", TimestampType.TIMESTAMP, toTimestamp(TIMESTAMP.plusYears(3)));
 
+        assertFunction("date_add('millisecond', 3, " + WEIRD_TIMESTAMP_LITERAL + ")", TIMESTAMP_WITH_TIME_ZONE, toTimestampWithTimeZone(WEIRD_TIMESTAMP.plusMillis(3)));
         assertFunction("date_add('second', 3, " + WEIRD_TIMESTAMP_LITERAL + ")", TIMESTAMP_WITH_TIME_ZONE, toTimestampWithTimeZone(WEIRD_TIMESTAMP.plusSeconds(3)));
         assertFunction("date_add('minute', 3, " + WEIRD_TIMESTAMP_LITERAL + ")", TIMESTAMP_WITH_TIME_ZONE, toTimestampWithTimeZone(WEIRD_TIMESTAMP.plusMinutes(3)));
         assertFunction("date_add('hour', 3, " + WEIRD_TIMESTAMP_LITERAL + ")", TIMESTAMP_WITH_TIME_ZONE, toTimestampWithTimeZone(WEIRD_TIMESTAMP.plusHours(3)));
@@ -510,10 +512,12 @@ public class TestDateTimeFunctions
     @Test
     public void testAddFieldToTime()
     {
+        assertFunction("date_add('millisecond', 3, " + TIME_LITERAL + ")", TimeType.TIME, toTime(TIME.plusMillis(3)));
         assertFunction("date_add('second', 3, " + TIME_LITERAL + ")", TimeType.TIME, toTime(TIME.plusSeconds(3)));
         assertFunction("date_add('minute', 3, " + TIME_LITERAL + ")", TimeType.TIME, toTime(TIME.plusMinutes(3)));
         assertFunction("date_add('hour', 3, " + TIME_LITERAL + ")", TimeType.TIME, toTime(TIME.plusHours(3)));
 
+        assertFunction("date_add('millisecond', 3, " + WEIRD_TIME_LITERAL + ")", TIME_WITH_TIME_ZONE, toTimeWithTimeZone(WEIRD_TIME.plusMillis(3)));
         assertFunction("date_add('second', 3, " + WEIRD_TIME_LITERAL + ")", TIME_WITH_TIME_ZONE, toTimeWithTimeZone(WEIRD_TIME.plusSeconds(3)));
         assertFunction("date_add('minute', 3, " + WEIRD_TIME_LITERAL + ")", TIME_WITH_TIME_ZONE, toTimeWithTimeZone(WEIRD_TIME.plusMinutes(3)));
         assertFunction("date_add('hour', 3, " + WEIRD_TIME_LITERAL + ")", TIME_WITH_TIME_ZONE, toTimeWithTimeZone(WEIRD_TIME.plusHours(3)));

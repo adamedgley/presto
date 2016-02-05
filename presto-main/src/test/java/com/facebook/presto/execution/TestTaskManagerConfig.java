@@ -39,14 +39,15 @@ public class TestTaskManagerConfig
                 .setMinDrivers(Runtime.getRuntime().availableProcessors() * 4 * 2)
                 .setInfoMaxAge(new Duration(15, TimeUnit.MINUTES))
                 .setClientTimeout(new Duration(2, TimeUnit.MINUTES))
-                .setMaxTaskMemoryUsage(new DataSize(256, Unit.MEGABYTE))
-                .setMaxTaskIndexMemoryUsage(new DataSize(64, Unit.MEGABYTE))
+                .setMaxIndexMemoryUsage(new DataSize(64, Unit.MEGABYTE))
+                .setShareIndexLoading(false)
                 .setOperatorPreAllocatedMemory(new DataSize(16, Unit.MEGABYTE))
                 .setMaxPartialAggregationMemoryUsage(new DataSize(16, Unit.MEGABYTE))
                 .setSinkMaxBufferSize(new DataSize(32, Unit.MEGABYTE))
                 .setWriterCount(1)
                 .setTaskDefaultConcurrency(1)
-                .setHttpNotificationThreads(25));
+                .setHttpResponseThreads(100)
+                .setHttpTimeoutThreads(3));
     }
 
     @Test
@@ -56,8 +57,8 @@ public class TestTaskManagerConfig
                 .put("task.info-refresh-max-wait", "1s")
                 .put("task.verbose-stats", "true")
                 .put("task.cpu-timer-enabled", "false")
-                .put("task.max-memory", "2GB")
                 .put("task.max-index-memory", "512MB")
+                .put("task.share-index-loading", "true")
                 .put("task.operator-pre-allocated-memory", "2MB")
                 .put("task.max-partial-aggregation-memory", "32MB")
                 .put("task.max-worker-threads", "3")
@@ -67,15 +68,16 @@ public class TestTaskManagerConfig
                 .put("sink.max-buffer-size", "42MB")
                 .put("task.writer-count", "3")
                 .put("task.default-concurrency", "7")
-                .put("task.http-notification-threads", "4")
+                .put("task.http-response-threads", "4")
+                .put("task.http-timeout-threads", "10")
                 .build();
 
         TaskManagerConfig expected = new TaskManagerConfig()
                 .setInfoRefreshMaxWait(new Duration(1, TimeUnit.SECONDS))
                 .setVerboseStats(true)
                 .setTaskCpuTimerEnabled(false)
-                .setMaxTaskMemoryUsage(new DataSize(2, Unit.GIGABYTE))
-                .setMaxTaskIndexMemoryUsage(new DataSize(512, Unit.MEGABYTE))
+                .setMaxIndexMemoryUsage(new DataSize(512, Unit.MEGABYTE))
+                .setShareIndexLoading(true)
                 .setOperatorPreAllocatedMemory(new DataSize(2, Unit.MEGABYTE))
                 .setMaxPartialAggregationMemoryUsage(new DataSize(32, Unit.MEGABYTE))
                 .setMaxWorkerThreads(3)
@@ -85,7 +87,8 @@ public class TestTaskManagerConfig
                 .setSinkMaxBufferSize(new DataSize(42, Unit.MEGABYTE))
                 .setWriterCount(3)
                 .setTaskDefaultConcurrency(7)
-                .setHttpNotificationThreads(4);
+                .setHttpResponseThreads(4)
+                .setHttpTimeoutThreads(10);
 
         assertFullMapping(properties, expected);
     }

@@ -21,8 +21,8 @@ import java.util.List;
 import java.util.Optional;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
+import static java.util.Objects.requireNonNull;
 
 public class StageExecutionPlan
 {
@@ -31,11 +31,14 @@ public class StageExecutionPlan
     private final List<StageExecutionPlan> subStages;
     private final Optional<List<String>> fieldNames;
 
-    public StageExecutionPlan(PlanFragment fragment, Optional<SplitSource> dataSource, List<StageExecutionPlan> subStages)
+    public StageExecutionPlan(
+            PlanFragment fragment,
+            Optional<SplitSource> dataSource,
+            List<StageExecutionPlan> subStages)
     {
-        this.fragment = checkNotNull(fragment, "fragment is null");
-        this.dataSource = checkNotNull(dataSource, "dataSource is null");
-        this.subStages = ImmutableList.copyOf(checkNotNull(subStages, "dependencies is null"));
+        this.fragment = requireNonNull(fragment, "fragment is null");
+        this.dataSource = requireNonNull(dataSource, "dataSource is null");
+        this.subStages = ImmutableList.copyOf(requireNonNull(subStages, "dependencies is null"));
 
         fieldNames = (fragment.getRoot() instanceof OutputNode) ?
                 Optional.<List<String>>of(ImmutableList.copyOf(((OutputNode) fragment.getRoot()).getColumnNames())) :
@@ -61,6 +64,11 @@ public class StageExecutionPlan
     public List<StageExecutionPlan> getSubStages()
     {
         return subStages;
+    }
+
+    public StageExecutionPlan withBucketToPartition(Optional<int[]> bucketToPartition)
+    {
+        return new StageExecutionPlan(fragment.withBucketToPartition(bucketToPartition), dataSource, subStages);
     }
 
     @Override

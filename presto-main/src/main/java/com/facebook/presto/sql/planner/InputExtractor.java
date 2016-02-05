@@ -16,10 +16,10 @@ package com.facebook.presto.sql.planner;
 import com.facebook.presto.Session;
 import com.facebook.presto.execution.Column;
 import com.facebook.presto.execution.Input;
-import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.TableHandle;
 import com.facebook.presto.metadata.TableMetadata;
+import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ColumnMetadata;
 import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.sql.planner.plan.IndexSourceNode;
@@ -63,7 +63,7 @@ public class InputExtractor
 
     private static Column createColumnEntry(ColumnMetadata columnMetadata)
     {
-        return new Column(columnMetadata.getName(), columnMetadata.getType().toString(), Optional.empty());
+        return new Column(columnMetadata.getName(), columnMetadata.getType().toString());
     }
 
     private static TableEntry createTableEntry(TableMetadata table)

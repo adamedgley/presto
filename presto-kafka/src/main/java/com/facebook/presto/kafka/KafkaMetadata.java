@@ -13,16 +13,20 @@
  */
 package com.facebook.presto.kafka;
 
-import com.facebook.presto.kafka.decoder.dummy.DummyKafkaRowDecoder;
+import com.facebook.presto.decoder.dummy.DummyRowDecoder;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ColumnMetadata;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.ConnectorTableHandle;
+import com.facebook.presto.spi.ConnectorTableLayout;
+import com.facebook.presto.spi.ConnectorTableLayoutHandle;
+import com.facebook.presto.spi.ConnectorTableLayoutResult;
 import com.facebook.presto.spi.ConnectorTableMetadata;
-import com.facebook.presto.spi.ReadOnlyConnectorMetadata;
+import com.facebook.presto.spi.Constraint;
 import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.SchemaTablePrefix;
 import com.facebook.presto.spi.TableNotFoundException;
+import com.facebook.presto.spi.connector.ConnectorMetadata;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -31,10 +35,13 @@ import javax.inject.Inject;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.function.Supplier;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static com.facebook.presto.kafka.KafkaHandleResolver.convertColumnHandle;
+import static com.facebook.presto.kafka.KafkaHandleResolver.convertTableHandle;
+import static java.util.Objects.requireNonNull;
 
 /**
  * Manages the Kafka connector specific metadata information. The Connector provides an additional set of columns
@@ -42,10 +49,9 @@ import static com.google.common.base.Preconditions.checkNotNull;
  * of per-topic additional columns.
  */
 public class KafkaMetadata
-        extends ReadOnlyConnectorMetadata
+        implements ConnectorMetadata
 {
     private final String connectorId;
-    private final KafkaHandleResolver handleResolver;
     private final boolean hideInternalColumns;
     private final Map<SchemaTableName, KafkaTopicDescription> tableDescriptions;
     private final Set<KafkaInternalFieldDescription> internalFieldDescriptions;
@@ -54,19 +60,17 @@ public class KafkaMetadata
     public KafkaMetadata(
             KafkaConnectorId connectorId,
             KafkaConnectorConfig kafkaConnectorConfig,
-            KafkaHandleResolver handleResolver,
             Supplier<Map<SchemaTableName, KafkaTopicDescription>> kafkaTableDescriptionSupplier,
             Set<KafkaInternalFieldDescription> internalFieldDescriptions)
     {
-        this.connectorId = checkNotNull(connectorId, "connectorId is null").toString();
-        this.handleResolver = checkNotNull(handleResolver, "handleResolver is null");
+        this.connectorId = requireNonNull(connectorId, "connectorId is null").toString();
 
-        checkNotNull(kafkaConnectorConfig, "kafkaConfig is null");
+        requireNonNull(kafkaConnectorConfig, "kafkaConfig is null");
         this.hideInternalColumns = kafkaConnectorConfig.isHideInternalColumns();
 
-        checkNotNull(kafkaTableDescriptionSupplier, "kafkaTableDescriptionSupplier is null");
+        requireNonNull(kafkaTableDescriptionSupplier, "kafkaTableDescriptionSupplier is null");
         this.tableDescriptions = kafkaTableDescriptionSupplier.get();
-        this.internalFieldDescriptions = checkNotNull(internalFieldDescriptions, "internalFieldDescriptions is null");
+        this.internalFieldDescriptions = requireNonNull(internalFieldDescriptions, "internalFieldDescriptions is null");
     }
 
     @Override
@@ -97,14 +101,13 @@ public class KafkaMetadata
 
     private static String getDataFormat(KafkaTopicFieldGroup fieldGroup)
     {
-        return (fieldGroup == null) ? DummyKafkaRowDecoder.NAME : fieldGroup.getDataFormat();
+        return (fieldGroup == null) ? DummyRowDecoder.NAME : fieldGroup.getDataFormat();
     }
 
     @Override
     public ConnectorTableMetadata getTableMetadata(ConnectorSession session, ConnectorTableHandle tableHandle)
     {
-        KafkaTableHandle kafkaTableHandle = handleResolver.convertTableHandle(tableHandle);
-        return getTableMetadata(kafkaTableHandle.toSchemaTableName());
+        return getTableMetadata(convertTableHandle(tableHandle).toSchemaTableName());
     }
 
     @Override
@@ -120,17 +123,11 @@ public class KafkaMetadata
         return builder.build();
     }
 
-    @Override
-    public ColumnHandle getSampleWeightColumnHandle(ConnectorSession session, ConnectorTableHandle tableHandle)
-    {
-        return null;
-    }
-
     @SuppressWarnings("ValueOfIncrementOrDecrementUsed")
     @Override
     public Map<String, ColumnHandle> getColumnHandles(ConnectorSession session, ConnectorTableHandle tableHandle)
     {
-        KafkaTableHandle kafkaTableHandle = handleResolver.convertTableHandle(tableHandle);
+        KafkaTableHandle kafkaTableHandle = convertTableHandle(tableHandle);
 
         KafkaTopicDescription kafkaTopicDescription = tableDescriptions.get(kafkaTableHandle.toSchemaTableName());
         if (kafkaTopicDescription == null) {
@@ -170,7 +167,7 @@ public class KafkaMetadata
     @Override
     public Map<SchemaTableName, List<ColumnMetadata>> listTableColumns(ConnectorSession session, SchemaTablePrefix prefix)
     {
-        checkNotNull(prefix, "prefix is null");
+        requireNonNull(prefix, "prefix is null");
 
         ImmutableMap.Builder<SchemaTableName, List<ColumnMetadata>> columns = ImmutableMap.builder();
 
@@ -189,10 +186,22 @@ public class KafkaMetadata
     @Override
     public ColumnMetadata getColumnMetadata(ConnectorSession session, ConnectorTableHandle tableHandle, ColumnHandle columnHandle)
     {
-        handleResolver.convertTableHandle(tableHandle);
-        KafkaColumnHandle kafkaColumnHandle = handleResolver.convertColumnHandle(columnHandle);
+        convertTableHandle(tableHandle);
+        return convertColumnHandle(columnHandle).getColumnMetadata();
+    }
 
-        return kafkaColumnHandle.getColumnMetadata();
+    @Override
+    public List<ConnectorTableLayoutResult> getTableLayouts(ConnectorSession session, ConnectorTableHandle table, Constraint<ColumnHandle> constraint, Optional<Set<ColumnHandle>> desiredColumns)
+    {
+        KafkaTableHandle handle = convertTableHandle(table);
+        ConnectorTableLayout layout = new ConnectorTableLayout(new KafkaTableLayoutHandle(handle));
+        return ImmutableList.of(new ConnectorTableLayoutResult(layout, constraint.getSummary()));
+    }
+
+    @Override
+    public ConnectorTableLayout getTableLayout(ConnectorSession session, ConnectorTableLayoutHandle handle)
+    {
+        return new ConnectorTableLayout(handle);
     }
 
     @SuppressWarnings("ValueOfIncrementOrDecrementUsed")

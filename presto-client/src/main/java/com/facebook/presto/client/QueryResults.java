@@ -13,7 +13,10 @@
  */
 package com.facebook.presto.client;
 
+import com.facebook.presto.spi.type.NamedTypeSignature;
+import com.facebook.presto.spi.type.ParameterKind;
 import com.facebook.presto.spi.type.TypeSignature;
+import com.facebook.presto.spi.type.TypeSignatureParameter;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.collect.ImmutableList;
@@ -49,9 +52,9 @@ import static com.facebook.presto.spi.type.StandardTypes.VARCHAR;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.collect.Iterables.unmodifiableIterable;
 import static java.util.Collections.unmodifiableList;
+import static java.util.Objects.requireNonNull;
 
 @Immutable
 public class QueryResults
@@ -95,13 +98,13 @@ public class QueryResults
             String updateType,
             Long updateCount)
     {
-        this.id = checkNotNull(id, "id is null");
-        this.infoUri = checkNotNull(infoUri, "infoUri is null");
+        this.id = requireNonNull(id, "id is null");
+        this.infoUri = requireNonNull(infoUri, "infoUri is null");
         this.partialCancelUri = partialCancelUri;
         this.nextUri = nextUri;
         this.columns = (columns != null) ? ImmutableList.copyOf(columns) : null;
         this.data = (data != null) ? unmodifiableIterable(data) : null;
-        this.stats = checkNotNull(stats, "stats is null");
+        this.stats = requireNonNull(stats, "stats is null");
         this.error = error;
         this.updateType = updateType;
         this.updateCount = updateCount;
@@ -199,7 +202,7 @@ public class QueryResults
         if (data == null) {
             return null;
         }
-        checkNotNull(columns, "columns is null");
+        requireNonNull(columns, "columns is null");
         ImmutableList.Builder<List<Object>> rows = ImmutableList.builder();
         for (List<Object> row : data) {
             checkArgument(row.size() == columns.size(), "row/column size mismatch");
@@ -224,13 +227,13 @@ public class QueryResults
         if (signature.getBase().equals(ARRAY)) {
             List<Object> fixedValue = new ArrayList<>();
             for (Object object : List.class.cast(value)) {
-                fixedValue.add(fixValue(signature.getParameters().get(0).toString(), object));
+                fixedValue.add(fixValue(signature.getTypeParametersAsTypeSignatures().get(0).toString(), object));
             }
             return fixedValue;
         }
         if (signature.getBase().equals(MAP)) {
-            String keyType = signature.getParameters().get(0).toString();
-            String valueType = signature.getParameters().get(1).toString();
+            String keyType = signature.getTypeParametersAsTypeSignatures().get(0).toString();
+            String valueType = signature.getTypeParametersAsTypeSignatures().get(1).toString();
             Map<Object, Object> fixedValue = new HashMap<>();
             for (Map.Entry<?, ?> entry : (Set<Map.Entry<?, ?>>) Map.class.cast(value).entrySet()) {
                 fixedValue.put(fixValue(keyType, entry.getKey()), fixValue(valueType, entry.getValue()));
@@ -240,14 +243,20 @@ public class QueryResults
         if (signature.getBase().equals(ROW)) {
             Map<String, Object> fixedValue = new LinkedHashMap<>();
             List<Object> listValue = List.class.cast(value);
-            checkArgument(listValue.size() == signature.getLiteralParameters().size(), "Mismatched data values and row type");
+            checkArgument(listValue.size() == signature.getParameters().size(), "Mismatched data values and row type");
             for (int i = 0; i < listValue.size(); i++) {
-                String key = (String) signature.getLiteralParameters().get(i);
-                fixedValue.put(key, fixValue(signature.getParameters().get(i).toString(), listValue.get(i)));
+                TypeSignatureParameter parameter = signature.getParameters().get(i);
+                checkArgument(
+                        parameter.getKind() == ParameterKind.NAMED_TYPE,
+                        "Unexpected parameter [%s] for row type",
+                        parameter);
+                NamedTypeSignature namedTypeSignature = parameter.getNamedTypeSignature();
+                String key = namedTypeSignature.getName();
+                fixedValue.put(key, fixValue(namedTypeSignature.getTypeSignature().toString(), listValue.get(i)));
             }
             return fixedValue;
         }
-        switch (type) {
+        switch (signature.getBase()) {
             case BIGINT:
                 if (value instanceof String) {
                     return Long.parseLong((String) value);

@@ -13,16 +13,17 @@
  */
 package com.facebook.presto.operator.aggregation.state;
 
-import com.facebook.presto.byteCode.Block;
-import com.facebook.presto.byteCode.ClassDefinition;
-import com.facebook.presto.byteCode.DynamicClassLoader;
-import com.facebook.presto.byteCode.FieldDefinition;
-import com.facebook.presto.byteCode.MethodDefinition;
-import com.facebook.presto.byteCode.Parameter;
-import com.facebook.presto.byteCode.Scope;
-import com.facebook.presto.byteCode.Variable;
-import com.facebook.presto.byteCode.expression.ByteCodeExpression;
+import com.facebook.presto.bytecode.BytecodeBlock;
+import com.facebook.presto.bytecode.ClassDefinition;
+import com.facebook.presto.bytecode.DynamicClassLoader;
+import com.facebook.presto.bytecode.FieldDefinition;
+import com.facebook.presto.bytecode.MethodDefinition;
+import com.facebook.presto.bytecode.Parameter;
+import com.facebook.presto.bytecode.Scope;
+import com.facebook.presto.bytecode.Variable;
+import com.facebook.presto.bytecode.expression.BytecodeExpression;
 import com.facebook.presto.operator.aggregation.GroupedAccumulator;
+import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.gen.CallSiteBinder;
@@ -52,21 +53,23 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import static com.facebook.presto.byteCode.Access.FINAL;
-import static com.facebook.presto.byteCode.Access.PRIVATE;
-import static com.facebook.presto.byteCode.Access.PUBLIC;
-import static com.facebook.presto.byteCode.Access.STATIC;
-import static com.facebook.presto.byteCode.Access.a;
-import static com.facebook.presto.byteCode.Parameter.arg;
-import static com.facebook.presto.byteCode.ParameterizedType.type;
-import static com.facebook.presto.byteCode.expression.ByteCodeExpressions.add;
-import static com.facebook.presto.byteCode.expression.ByteCodeExpressions.constantBoolean;
-import static com.facebook.presto.byteCode.expression.ByteCodeExpressions.constantInt;
-import static com.facebook.presto.byteCode.expression.ByteCodeExpressions.constantLong;
-import static com.facebook.presto.byteCode.expression.ByteCodeExpressions.constantNumber;
-import static com.facebook.presto.byteCode.expression.ByteCodeExpressions.defaultValue;
-import static com.facebook.presto.byteCode.expression.ByteCodeExpressions.invokeStatic;
-import static com.facebook.presto.byteCode.expression.ByteCodeExpressions.newInstance;
+import static com.facebook.presto.bytecode.Access.FINAL;
+import static com.facebook.presto.bytecode.Access.PRIVATE;
+import static com.facebook.presto.bytecode.Access.PUBLIC;
+import static com.facebook.presto.bytecode.Access.STATIC;
+import static com.facebook.presto.bytecode.Access.a;
+import static com.facebook.presto.bytecode.CompilerUtils.defineClass;
+import static com.facebook.presto.bytecode.CompilerUtils.makeClassName;
+import static com.facebook.presto.bytecode.Parameter.arg;
+import static com.facebook.presto.bytecode.ParameterizedType.type;
+import static com.facebook.presto.bytecode.expression.BytecodeExpressions.add;
+import static com.facebook.presto.bytecode.expression.BytecodeExpressions.constantBoolean;
+import static com.facebook.presto.bytecode.expression.BytecodeExpressions.constantInt;
+import static com.facebook.presto.bytecode.expression.BytecodeExpressions.constantLong;
+import static com.facebook.presto.bytecode.expression.BytecodeExpressions.constantNumber;
+import static com.facebook.presto.bytecode.expression.BytecodeExpressions.defaultValue;
+import static com.facebook.presto.bytecode.expression.BytecodeExpressions.invokeStatic;
+import static com.facebook.presto.bytecode.expression.BytecodeExpressions.newInstance;
 import static com.facebook.presto.operator.aggregation.state.StateCompilerUtils.getBlockBuilderAppend;
 import static com.facebook.presto.operator.aggregation.state.StateCompilerUtils.getBlockGetter;
 import static com.facebook.presto.operator.aggregation.state.StateCompilerUtils.getSliceGetter;
@@ -75,13 +78,11 @@ import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
-import static com.facebook.presto.sql.gen.CompilerUtils.defineClass;
-import static com.facebook.presto.sql.gen.CompilerUtils.makeClassName;
-import static com.facebook.presto.sql.gen.SqlTypeByteCodeExpression.constantType;
+import static com.facebook.presto.sql.gen.SqlTypeBytecodeExpression.constantType;
 import static com.google.common.base.CaseFormat.LOWER_CAMEL;
 import static com.google.common.base.CaseFormat.UPPER_CAMEL;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class StateCompiler
 {
@@ -102,7 +103,7 @@ public class StateCompiler
         if (type.equals(Slice.class)) {
             return SliceBigArray.class;
         }
-        if (type.equals(com.facebook.presto.spi.block.Block.class)) {
+        if (type.equals(Block.class)) {
             return BlockBigArray.class;
         }
         // TODO: support more reference types
@@ -153,7 +154,7 @@ public class StateCompiler
 
     private static void generateGetSerializedType(ClassDefinition definition, List<StateField> fields, CallSiteBinder callSiteBinder)
     {
-        Block body = definition.declareMethod(a(PUBLIC), "getSerializedType", type(Type.class)).getBody();
+        BytecodeBlock body = definition.declareMethod(a(PUBLIC), "getSerializedType", type(Type.class)).getBody();
 
         Type type;
         if (fields.size() > 1) {
@@ -205,12 +206,12 @@ public class StateCompiler
 
     private static <T> void generateDeserialize(ClassDefinition definition, Class<T> clazz, List<StateField> fields)
     {
-        Parameter block = arg("block", com.facebook.presto.spi.block.Block.class);
+        Parameter block = arg("block", Block.class);
         Parameter index = arg("index", int.class);
         Parameter state = arg("state", Object.class);
         MethodDefinition method = definition.declareMethod(a(PUBLIC), "deserialize", type(void.class), block, index, state);
 
-        Block deserializerBody = method.getBody();
+        BytecodeBlock deserializerBody = method.getBody();
 
         if (fields.size() == 1) {
             Method setter = getSetter(clazz, fields.get(0));
@@ -237,7 +238,7 @@ public class StateCompiler
         Parameter out = arg("out", BlockBuilder.class);
         MethodDefinition method = definition.declareMethod(a(PUBLIC), "serialize", type(void.class), state, out);
 
-        Block serializerBody = method.getBody();
+        BytecodeBlock serializerBody = method.getBody();
 
         if (fields.size() == 1) {
             Method getter = getGetter(clazz, fields.get(0));
@@ -246,7 +247,7 @@ public class StateCompiler
         }
         else {
             Variable slice = method.getScope().declareVariable(Slice.class, "slice");
-            ByteCodeExpression size = constantInt(serializedSizeOf(clazz));
+            BytecodeExpression size = constantInt(serializedSizeOf(clazz));
             serializerBody.append(slice.set(invokeStatic(Slices.class, "allocate", Slice.class, size)));
 
             for (StateField field : fields) {
@@ -450,7 +451,7 @@ public class StateCompiler
 
         // Generate getEstimatedSize
         MethodDefinition getEstimatedSize = definition.declareMethod(a(PUBLIC), "getEstimatedSize", type(long.class));
-        Block body = getEstimatedSize.getBody();
+        BytecodeBlock body = getEstimatedSize.getBody();
 
         Variable size = getEstimatedSize.getScope().declareVariable(long.class, "size");
 
@@ -534,7 +535,7 @@ public class StateCompiler
     {
         ImmutableList.Builder<StateField> builder = ImmutableList.builder();
         final Set<Class<?>> primitiveClasses = ImmutableSet.<Class<?>>of(byte.class, boolean.class, long.class, double.class);
-        Set<Class<?>> supportedClasses = ImmutableSet.<Class<?>>of(byte.class, boolean.class, long.class, double.class, Slice.class, com.facebook.presto.spi.block.Block.class);
+        Set<Class<?>> supportedClasses = ImmutableSet.<Class<?>>of(byte.class, boolean.class, long.class, double.class, Slice.class, Block.class);
 
         for (Method method : clazz.getMethods()) {
             if (method.getName().equals("getEstimatedSize")) {
@@ -669,10 +670,10 @@ public class StateCompiler
 
         private StateField(String name, Class<?> type, Object initialValue, String getterName)
         {
-            this.name = checkNotNull(name, "name is null");
+            this.name = requireNonNull(name, "name is null");
             checkArgument(!name.isEmpty(), "name is empty");
-            this.type = checkNotNull(type, "type is null");
-            this.getterName = checkNotNull(getterName, "getterName is null");
+            this.type = requireNonNull(type, "type is null");
+            this.getterName = requireNonNull(getterName, "getterName is null");
             this.initialValue = initialValue;
         }
 
@@ -717,7 +718,7 @@ public class StateCompiler
             return initialValue;
         }
 
-        public ByteCodeExpression initialValueExpression()
+        public BytecodeExpression initialValueExpression()
         {
             if (initialValue == null) {
                 return defaultValue(type);

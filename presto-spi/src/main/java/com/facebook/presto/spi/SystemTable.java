@@ -13,12 +13,17 @@
  */
 package com.facebook.presto.spi;
 
+import com.facebook.presto.spi.connector.ConnectorTransactionHandle;
+import com.facebook.presto.spi.predicate.TupleDomain;
+
 public interface SystemTable
 {
-    /**
-     * True if table is distributed across all nodes.
-     */
-    boolean isDistributed();
+    enum Distribution
+    {
+        ALL_NODES, ALL_COORDINATORS, SINGLE_COORDINATOR
+    }
+
+    Distribution getDistribution();
 
     ConnectorTableMetadata getTableMetadata();
 
@@ -28,5 +33,5 @@ public interface SystemTable
      * @param session the session to use for creating the data
      * @param constraint the constraints for the table columns (indexed from 0)
      */
-    RecordCursor cursor(ConnectorSession session, TupleDomain<Integer> constraint);
+    RecordCursor cursor(ConnectorTransactionHandle transactionHandle, ConnectorSession session, TupleDomain<Integer> constraint);
 }

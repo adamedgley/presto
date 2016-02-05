@@ -35,7 +35,7 @@ import java.util.Map;
 
 import static com.facebook.presto.util.ImmutableCollectors.toImmutableList;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 @Immutable
 public class UnionNode
@@ -43,20 +43,25 @@ public class UnionNode
 {
     private final List<PlanNode> sources;
     private final ImmutableListMultimap<Symbol, Symbol> symbolMapping; // Key is output symbol, value is a List of the input symbols supplying that output
+    private final List<Symbol> outputs;
 
     @JsonCreator
-    public UnionNode(@JsonProperty("id") PlanNodeId id,
+    public UnionNode(
+            @JsonProperty("id") PlanNodeId id,
             @JsonProperty("sources") List<PlanNode> sources,
-            @JsonProperty("symbolMapping") ListMultimap<Symbol, Symbol> symbolMapping)
+            @JsonProperty("symbolMapping") ListMultimap<Symbol, Symbol> symbolMapping,
+            @JsonProperty("outputs") List<Symbol> outputs)
     {
         super(id);
 
-        checkNotNull(sources, "sources is null");
+        requireNonNull(sources, "sources is null");
         checkArgument(!sources.isEmpty(), "Must have at least one source");
-        checkNotNull(symbolMapping, "symbolMapping is null");
+        requireNonNull(symbolMapping, "symbolMapping is null");
+        requireNonNull(outputs, "outputs is null");
 
         this.sources = ImmutableList.copyOf(sources);
         this.symbolMapping = ImmutableListMultimap.copyOf(symbolMapping);
+        this.outputs = ImmutableList.copyOf(outputs);
 
         for (Collection<Symbol> symbols : this.symbolMapping.asMap().values()) {
             checkArgument(symbols.size() == this.sources.size(), "Every source needs to map its symbols to an output UNION symbol");
@@ -78,9 +83,10 @@ public class UnionNode
     }
 
     @Override
+    @JsonProperty("outputs")
     public List<Symbol> getOutputSymbols()
     {
-        return ImmutableList.copyOf(symbolMapping.keySet());
+        return outputs;
     }
 
     @JsonProperty("symbolMapping")

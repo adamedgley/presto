@@ -18,15 +18,16 @@ import com.facebook.presto.spi.Connector;
 import com.facebook.presto.spi.ConnectorFactory;
 import com.facebook.presto.spi.ConnectorHandleResolver;
 import com.facebook.presto.spi.ConnectorMetadata;
+import com.facebook.presto.spi.ConnectorPageSinkProvider;
 import com.facebook.presto.spi.ConnectorPageSourceProvider;
-import com.facebook.presto.spi.ConnectorRecordSinkProvider;
 import com.facebook.presto.spi.ConnectorSplitManager;
-import com.facebook.presto.spi.classloader.ClassLoaderSafeConnectorHandleResolver;
+import com.facebook.presto.spi.PageIndexerFactory;
 import com.facebook.presto.spi.classloader.ClassLoaderSafeConnectorMetadata;
+import com.facebook.presto.spi.classloader.ClassLoaderSafeConnectorPageSinkProvider;
 import com.facebook.presto.spi.classloader.ClassLoaderSafeConnectorPageSourceProvider;
-import com.facebook.presto.spi.classloader.ClassLoaderSafeConnectorRecordSinkProvider;
 import com.facebook.presto.spi.classloader.ClassLoaderSafeConnectorSplitManager;
 import com.facebook.presto.spi.classloader.ThreadContextClassLoader;
+import com.facebook.presto.spi.security.ConnectorAccessControl;
 import com.facebook.presto.spi.type.TypeManager;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableSet;
@@ -42,9 +43,11 @@ import javax.management.MBeanServer;
 import java.lang.management.ManagementFactory;
 import java.util.Map;
 
+import static com.facebook.presto.hive.ConditionalModule.installModuleIf;
+import static com.facebook.presto.hive.SecurityConfig.ALLOW_ALL_ACCESS_CONTROL;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Strings.isNullOrEmpty;
+import static java.util.Objects.requireNonNull;
 
 public class HiveConnectorFactory
         implements ConnectorFactory
@@ -54,15 +57,23 @@ public class HiveConnectorFactory
     private final ClassLoader classLoader;
     private final HiveMetastore metastore;
     private final TypeManager typeManager;
+    private final PageIndexerFactory pageIndexerFactory;
 
-    public HiveConnectorFactory(String name, Map<String, String> optionalConfig, ClassLoader classLoader, HiveMetastore metastore, TypeManager typeManager)
+    public HiveConnectorFactory(
+            String name,
+            Map<String, String> optionalConfig,
+            ClassLoader classLoader,
+            HiveMetastore metastore,
+            TypeManager typeManager,
+            PageIndexerFactory pageIndexerFactory)
     {
         checkArgument(!isNullOrEmpty(name), "name is null or empty");
         this.name = name;
-        this.optionalConfig = checkNotNull(optionalConfig, "optionalConfig is null");
-        this.classLoader = checkNotNull(classLoader, "classLoader is null");
+        this.optionalConfig = requireNonNull(optionalConfig, "optionalConfig is null");
+        this.classLoader = requireNonNull(classLoader, "classLoader is null");
         this.metastore = metastore;
-        this.typeManager = checkNotNull(typeManager, "typeManager is null");
+        this.typeManager = requireNonNull(typeManager, "typeManager is null");
+        this.pageIndexerFactory = requireNonNull(pageIndexerFactory, "pageIndexer is null");
     }
 
     @Override
@@ -72,16 +83,34 @@ public class HiveConnectorFactory
     }
 
     @Override
+    public ConnectorHandleResolver getHandleResolver()
+    {
+        return new HiveHandleResolver();
+    }
+
+    @Override
     public Connector create(String connectorId, Map<String, String> config)
     {
-        checkNotNull(config, "config is null");
+        requireNonNull(config, "config is null");
 
         try (ThreadContextClassLoader ignored = new ThreadContextClassLoader(classLoader)) {
             Bootstrap app = new Bootstrap(
                     new NodeModule(),
                     new MBeanModule(),
                     new JsonModule(),
-                    new HiveClientModule(connectorId, metastore, typeManager),
+                    new HiveClientModule(connectorId, metastore, typeManager, pageIndexerFactory),
+                    installModuleIf(
+                            SecurityConfig.class,
+                            security -> ALLOW_ALL_ACCESS_CONTROL.equalsIgnoreCase(security.getSecuritySystem()),
+                            new NoSecurityModule()),
+                    installModuleIf(
+                            SecurityConfig.class,
+                            security -> "read-only".equalsIgnoreCase(security.getSecuritySystem()),
+                            new ReadOnlySecurityModule()),
+                    installModuleIf(
+                            SecurityConfig.class,
+                            security -> "sql-standard".equalsIgnoreCase(security.getSecuritySystem()),
+                            new SqlStandardSecurityModule()),
                     binder -> {
                         MBeanServer platformMBeanServer = ManagementFactory.getPlatformMBeanServer();
                         binder.bind(MBeanServer.class).toInstance(new RebindSafeMBeanServer(platformMBeanServer));
@@ -99,21 +128,21 @@ public class HiveConnectorFactory
             ConnectorMetadata metadata = injector.getInstance(ConnectorMetadata.class);
             ConnectorSplitManager splitManager = injector.getInstance(ConnectorSplitManager.class);
             ConnectorPageSourceProvider connectorPageSource = injector.getInstance(ConnectorPageSourceProvider.class);
-            ConnectorRecordSinkProvider recordSinkProvider = injector.getInstance(ConnectorRecordSinkProvider.class);
-            ConnectorHandleResolver handleResolver = injector.getInstance(ConnectorHandleResolver.class);
+            ConnectorPageSinkProvider pageSinkProvider = injector.getInstance(ConnectorPageSinkProvider.class);
             HiveSessionProperties hiveSessionProperties = injector.getInstance(HiveSessionProperties.class);
             HiveTableProperties hiveTableProperties = injector.getInstance(HiveTableProperties.class);
+            ConnectorAccessControl accessControl = injector.getInstance(ConnectorAccessControl.class);
 
             return new HiveConnector(
                     lifeCycleManager,
                     new ClassLoaderSafeConnectorMetadata(metadata, classLoader),
                     new ClassLoaderSafeConnectorSplitManager(splitManager, classLoader),
                     new ClassLoaderSafeConnectorPageSourceProvider(connectorPageSource, classLoader),
-                    new ClassLoaderSafeConnectorRecordSinkProvider(recordSinkProvider, classLoader),
-                    new ClassLoaderSafeConnectorHandleResolver(handleResolver, classLoader),
+                    new ClassLoaderSafeConnectorPageSinkProvider(pageSinkProvider, classLoader),
                     ImmutableSet.of(),
                     hiveSessionProperties.getSessionProperties(),
-                    hiveTableProperties.getTableProperties());
+                    hiveTableProperties.getTableProperties(),
+                    accessControl);
         }
         catch (Exception e) {
             throw Throwables.propagate(e);

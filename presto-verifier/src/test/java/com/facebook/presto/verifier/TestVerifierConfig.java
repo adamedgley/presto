@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.verifier;
 
+import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableMap;
 import io.airlift.configuration.testing.ConfigAssertions;
 import io.airlift.units.Duration;
@@ -21,6 +22,10 @@ import org.testng.annotations.Test;
 
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+
+import static com.facebook.presto.verifier.QueryType.CREATE;
+import static com.facebook.presto.verifier.QueryType.MODIFY;
+import static com.facebook.presto.verifier.QueryType.READ;
 
 public class TestVerifierConfig
 {
@@ -34,6 +39,8 @@ public class TestVerifierConfig
                 .setControlPasswordOverride(null)
                 .setSuite(null)
                 .setSuites(null)
+                .setControlQueryTypes(Joiner.on(",").join(CREATE, READ, MODIFY))
+                .setTestQueryTypes(Joiner.on(",").join(CREATE, READ, MODIFY))
                 .setSource(null)
                 .setRunId(new DateTime().toString("yyyy-MM-dd"))
                 .setEventClients("human-readable")
@@ -62,7 +69,9 @@ public class TestVerifierConfig
                 .setEventLogFile(null)
                 .setAdditionalJdbcDriverPath(null)
                 .setTestJdbcDriverName(null)
-                .setControlJdbcDriverName(null));
+                .setControlJdbcDriverName(null)
+                .setDoublePrecision(3)
+                .setRegressionMinCpuTime(new Duration(5, TimeUnit.MINUTES)));
     }
 
     @Test
@@ -71,6 +80,8 @@ public class TestVerifierConfig
         Map<String, String> properties = new ImmutableMap.Builder<String, String>()
                 .put("suites", "my_suite")
                 .put("suite", "my_suite")
+                .put("control.query-types", READ.name())
+                .put("test.query-types", MODIFY.name())
                 .put("source", "my_source")
                 .put("run-id", "my_run_id")
                 .put("event-client", "file,human-readable")
@@ -104,11 +115,15 @@ public class TestVerifierConfig
                 .put("additional-jdbc-driver-path", "/test/path")
                 .put("test.jdbc-driver-class", "com.facebook.exampleclass")
                 .put("control.jdbc-driver-class", "com.facebook.exampleclass")
+                .put("expected-double-precision", "5")
+                .put("regression.min-cpu-time", "30s")
                 .build();
 
         VerifierConfig expected = new VerifierConfig().setTestUsernameOverride("verifier-test")
                 .setSuites("my_suite")
                 .setSuite("my_suite")
+                .setControlQueryTypes(READ.name())
+                .setTestQueryTypes(MODIFY.name())
                 .setSource("my_source")
                 .setRunId("my_run_id")
                 .setEventClients("file,human-readable")
@@ -141,7 +156,9 @@ public class TestVerifierConfig
                 .setControlSchemaOverride("my_schema")
                 .setAdditionalJdbcDriverPath("/test/path")
                 .setTestJdbcDriverName("com.facebook.exampleclass")
-                .setControlJdbcDriverName("com.facebook.exampleclass");
+                .setControlJdbcDriverName("com.facebook.exampleclass")
+                .setDoublePrecision(5)
+                .setRegressionMinCpuTime(new Duration(30, TimeUnit.SECONDS));
 
         ConfigAssertions.assertFullMapping(properties, expected);
     }

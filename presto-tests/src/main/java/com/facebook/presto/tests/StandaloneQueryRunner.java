@@ -16,13 +16,15 @@ package com.facebook.presto.tests;
 import com.facebook.presto.Session;
 import com.facebook.presto.metadata.AllNodes;
 import com.facebook.presto.metadata.Metadata;
-import com.facebook.presto.metadata.QualifiedTableName;
+import com.facebook.presto.metadata.QualifiedObjectName;
 import com.facebook.presto.metadata.SessionPropertyManager;
 import com.facebook.presto.server.testing.TestingPrestoServer;
 import com.facebook.presto.spi.Node;
 import com.facebook.presto.spi.Plugin;
 import com.facebook.presto.testing.MaterializedResult;
 import com.facebook.presto.testing.QueryRunner;
+import com.facebook.presto.testing.TestingAccessControlManager;
+import com.facebook.presto.transaction.TransactionManager;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.inject.Module;
@@ -32,8 +34,11 @@ import org.intellij.lang.annotations.Language;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 public final class StandaloneQueryRunner
@@ -43,10 +48,12 @@ public final class StandaloneQueryRunner
 
     private final TestingPrestoClient prestoClient;
 
+    private final ReadWriteLock lock = new ReentrantReadWriteLock();
+
     public StandaloneQueryRunner(Session defaultSession)
             throws Exception
     {
-        checkNotNull(defaultSession, "defaultSession is null");
+        requireNonNull(defaultSession, "defaultSession is null");
 
         try {
             server = createTestingPrestoServer();
@@ -70,13 +77,25 @@ public final class StandaloneQueryRunner
     @Override
     public MaterializedResult execute(@Language("SQL") String sql)
     {
-        return prestoClient.execute(sql);
+        lock.readLock().lock();
+        try {
+            return prestoClient.execute(sql);
+        }
+        finally {
+            lock.readLock().unlock();
+        }
     }
 
     @Override
     public MaterializedResult execute(Session session, @Language("SQL") String sql)
     {
-        return prestoClient.execute(session, sql);
+        lock.readLock().lock();
+        try {
+            return prestoClient.execute(session, sql);
+        }
+        finally {
+            lock.readLock().unlock();
+        }
     }
 
     @Override
@@ -99,9 +118,21 @@ public final class StandaloneQueryRunner
     }
 
     @Override
+    public TransactionManager getTransactionManager()
+    {
+        return server.getTransactionManager();
+    }
+
+    @Override
     public Metadata getMetadata()
     {
         return server.getMetadata();
+    }
+
+    @Override
+    public TestingAccessControlManager getAccessControl()
+    {
+        return server.getAccessControl();
     }
 
     public TestingPrestoServer getServer()
@@ -161,15 +192,33 @@ public final class StandaloneQueryRunner
     }
 
     @Override
-    public List<QualifiedTableName> listTables(Session session, String catalog, String schema)
+    public List<QualifiedObjectName> listTables(Session session, String catalog, String schema)
     {
-        return prestoClient.listTables(session, catalog, schema);
+        lock.readLock().lock();
+        try {
+            return prestoClient.listTables(session, catalog, schema);
+        }
+        finally {
+            lock.readLock().unlock();
+        }
     }
 
     @Override
     public boolean tableExists(Session session, String table)
     {
-        return prestoClient.tableExists(session, table);
+        lock.readLock().lock();
+        try {
+            return prestoClient.tableExists(session, table);
+        }
+        finally {
+            lock.readLock().unlock();
+        }
+    }
+
+    @Override
+    public Lock getExclusiveLock()
+    {
+        return lock.writeLock();
     }
 
     private static TestingPrestoServer createTestingPrestoServer()

@@ -13,13 +13,21 @@
  */
 package com.facebook.presto.spi;
 
+import com.facebook.presto.spi.security.Identity;
 import com.facebook.presto.spi.type.TimeZoneKey;
 
 import java.util.Locale;
 
 public interface ConnectorSession
 {
-    String getUser();
+    String getQueryId();
+
+    default String getUser()
+    {
+        return getIdentity().getUser();
+    }
+
+    Identity getIdentity();
 
     TimeZoneKey getTimeZoneKey();
 

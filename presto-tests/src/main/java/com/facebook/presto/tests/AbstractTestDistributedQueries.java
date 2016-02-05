@@ -28,14 +28,12 @@ import org.testng.annotations.Test;
 import java.util.List;
 
 import static com.facebook.presto.connector.informationSchema.InformationSchemaMetadata.INFORMATION_SCHEMA;
-import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.sql.SqlFormatter.formatSql;
 import static com.facebook.presto.testing.MaterializedResult.resultBuilder;
 import static com.facebook.presto.tests.QueryAssertions.assertContains;
 import static com.facebook.presto.util.ImmutableCollectors.toImmutableList;
 import static com.google.common.collect.Iterables.getOnlyElement;
-import static com.google.common.collect.Iterables.transform;
 import static java.lang.String.format;
 import static java.util.Collections.nCopies;
 import static org.testng.Assert.assertEquals;
@@ -53,22 +51,6 @@ public abstract class AbstractTestDistributedQueries
     protected AbstractTestDistributedQueries(QueryRunner queryRunner, Session sampledSession)
     {
         super(queryRunner, sampledSession);
-    }
-
-    private void assertCreateTable(String table, @Language("SQL") String query, @Language("SQL") String rowCountQuery)
-            throws Exception
-    {
-        assertCreateTable(table, query, query, rowCountQuery);
-    }
-
-    private void assertCreateTable(String table, @Language("SQL") String query, @Language("SQL") String expectedQuery, @Language("SQL") String rowCountQuery)
-            throws Exception
-    {
-        assertQuery("CREATE TABLE " + table + " AS " + query, rowCountQuery);
-        assertQuery("SELECT * FROM " + table, expectedQuery);
-        assertQueryTrue("DROP TABLE " + table);
-
-        assertFalse(queryRunner.tableExists(getSession(), table));
     }
 
     @Test
@@ -125,22 +107,22 @@ public abstract class AbstractTestDistributedQueries
     public void testCreateTable()
             throws Exception
     {
-        assertQueryTrue("CREATE TABLE test_create (a bigint, b double, c varchar)");
+        assertUpdate("CREATE TABLE test_create (a bigint, b double, c varchar)");
         assertTrue(queryRunner.tableExists(getSession(), "test_create"));
         assertTableColumnNames("test_create", "a", "b", "c");
 
-        assertQueryTrue("DROP TABLE test_create");
+        assertUpdate("DROP TABLE test_create");
         assertFalse(queryRunner.tableExists(getSession(), "test_create"));
 
-        assertQueryTrue("CREATE TABLE test_create_table_if_not_exists (a bigint, b varchar, c double)");
+        assertUpdate("CREATE TABLE test_create_table_if_not_exists (a bigint, b varchar, c double)");
         assertTrue(queryRunner.tableExists(getSession(), "test_create_table_if_not_exists"));
         assertTableColumnNames("test_create_table_if_not_exists", "a", "b", "c");
 
-        assertQueryTrue("CREATE TABLE IF NOT EXISTS test_create_table_if_not_exists (d bigint, e varchar)");
+        assertUpdate("CREATE TABLE IF NOT EXISTS test_create_table_if_not_exists (d bigint, e varchar)");
         assertTrue(queryRunner.tableExists(getSession(), "test_create_table_if_not_exists"));
         assertTableColumnNames("test_create_table_if_not_exists", "a", "b", "c");
 
-        assertQueryTrue("DROP TABLE test_create_table_if_not_exists");
+        assertUpdate("DROP TABLE test_create_table_if_not_exists");
         assertFalse(queryRunner.tableExists(getSession(), "test_create_table_if_not_exists"));
     }
 
@@ -148,59 +130,115 @@ public abstract class AbstractTestDistributedQueries
     public void testCreateTableAsSelect()
             throws Exception
     {
-        assertCreateTable(
+        assertCreateTableAsSelect(
                 "test_select",
                 "SELECT orderdate, orderkey, totalprice FROM orders",
                 "SELECT count(*) FROM orders");
 
-        assertCreateTable(
+        assertCreateTableAsSelect(
                 "test_group",
                 "SELECT orderstatus, sum(totalprice) x FROM orders GROUP BY orderstatus",
                 "SELECT count(DISTINCT orderstatus) FROM orders");
 
-        assertCreateTable(
+        assertCreateTableAsSelect(
                 "test_join",
                 "SELECT count(*) x FROM lineitem JOIN orders ON lineitem.orderkey = orders.orderkey",
                 "SELECT 1");
 
-        assertCreateTable(
+        assertCreateTableAsSelect(
                 "test_limit",
                 "SELECT orderkey FROM orders ORDER BY orderkey LIMIT 10",
                 "SELECT 10");
 
-        assertCreateTable(
+        assertCreateTableAsSelect(
                 "test_unicode",
                 "SELECT '\u2603' unicode",
                 "SELECT 1");
-    }
 
-    @Test
-    public void testCreateTableAsSelectSampled()
-            throws Exception
-    {
-        assertCreateTable(
+        assertCreateTableAsSelect(
+                "test_with_data",
+                "SELECT * FROM orders WITH DATA",
+                "SELECT * FROM orders",
+                "SELECT count(*) FROM orders");
+
+        assertCreateTableAsSelect(
+                "test_with_no_data",
+                "SELECT * FROM orders WITH NO DATA",
+                "SELECT * FROM orders LIMIT 0",
+                "SELECT 0");
+
+        assertCreateTableAsSelect(
                 "test_sampled",
                 "SELECT orderkey FROM tpch_sampled.tiny.orders ORDER BY orderkey LIMIT 10",
                 "SELECT orderkey FROM orders ORDER BY orderkey LIMIT 10",
                 "SELECT 10");
+
+        // Tests for CREATE TABLE with UNION ALL: exercises PushTableWriteThroughUnion optimizer
+
+        assertCreateTableAsSelect(
+                "test_union_all",
+                "SELECT orderdate, orderkey, totalprice FROM orders WHERE orderkey % 2 = 0 UNION ALL " +
+                        "SELECT orderdate, orderkey, totalprice FROM orders WHERE orderkey % 2 = 1",
+                "SELECT orderdate, orderkey, totalprice FROM orders",
+                "SELECT count(*) FROM orders");
+
+        assertCreateTableAsSelect(
+                getSession().withSystemProperty("redistribute_writes", "true"),
+                "test_union_all",
+                "SELECT orderdate, orderkey, totalprice FROM orders UNION ALL " +
+                        "SELECT DATE '2000-01-01', 1234567890, 1.23",
+                "SELECT orderdate, orderkey, totalprice FROM orders UNION ALL " +
+                        "SELECT DATE '2000-01-01', 1234567890, 1.23",
+                "SELECT count(*) + 1 FROM orders");
+
+        assertCreateTableAsSelect(
+                getSession().withSystemProperty("redistribute_writes", "false"),
+                "test_union_all",
+                "SELECT orderdate, orderkey, totalprice FROM orders UNION ALL " +
+                        "SELECT DATE '2000-01-01', 1234567890, 1.23",
+                "SELECT orderdate, orderkey, totalprice FROM orders UNION ALL " +
+                        "SELECT DATE '2000-01-01', 1234567890, 1.23",
+                "SELECT count(*) + 1 FROM orders");
+    }
+
+    private void assertCreateTableAsSelect(String table, @Language("SQL") String query, @Language("SQL") String rowCountQuery)
+            throws Exception
+    {
+        assertCreateTableAsSelect(getSession(), table, query, query, rowCountQuery);
+    }
+
+    private void assertCreateTableAsSelect(String table, @Language("SQL") String query, @Language("SQL") String expectedQuery, @Language("SQL") String rowCountQuery)
+            throws Exception
+    {
+        assertCreateTableAsSelect(getSession(), table, query, expectedQuery, rowCountQuery);
+    }
+
+    private void assertCreateTableAsSelect(Session session, String table, @Language("SQL") String query, @Language("SQL") String expectedQuery, @Language("SQL") String rowCountQuery)
+            throws Exception
+    {
+        assertUpdate(session, "CREATE TABLE " + table + " AS " + query, rowCountQuery);
+        assertQuery(session, "SELECT * FROM " + table, expectedQuery);
+        assertUpdate(session, "DROP TABLE " + table);
+
+        assertFalse(queryRunner.tableExists(session, table));
     }
 
     @Test
     public void testRenameTable()
             throws Exception
     {
-        assertQueryTrue("CREATE TABLE test_rename AS SELECT 123 x");
+        assertUpdate("CREATE TABLE test_rename AS SELECT 123 x", 1);
 
-        assertQueryTrue("ALTER TABLE test_rename RENAME TO test_rename_new");
+        assertUpdate("ALTER TABLE test_rename RENAME TO test_rename_new");
         MaterializedResult materializedRows = computeActual("SELECT x FROM test_rename_new");
         assertEquals(getOnlyElement(materializedRows.getMaterializedRows()).getField(0), 123L);
 
         // provide new table name in uppercase
-        assertQueryTrue("ALTER TABLE test_rename_new RENAME TO TEST_RENAME");
+        assertUpdate("ALTER TABLE test_rename_new RENAME TO TEST_RENAME");
         materializedRows = computeActual("SELECT x FROM test_rename");
         assertEquals(getOnlyElement(materializedRows.getMaterializedRows()).getField(0), 123L);
 
-        assertQueryTrue("DROP TABLE test_rename");
+        assertUpdate("DROP TABLE test_rename");
 
         assertFalse(queryRunner.tableExists(getSession(), "test_rename"));
         assertFalse(queryRunner.tableExists(getSession(), "test_rename_new"));
@@ -210,18 +248,55 @@ public abstract class AbstractTestDistributedQueries
     public void testRenameColumn()
             throws Exception
     {
-        assertQueryTrue("CREATE TABLE test_rename_column AS SELECT 123 x");
+        assertUpdate("CREATE TABLE test_rename_column AS SELECT 123 x", 1);
 
-        assertQueryTrue("ALTER TABLE test_rename_column RENAME COLUMN x TO y");
+        assertUpdate("ALTER TABLE test_rename_column RENAME COLUMN x TO y");
         MaterializedResult materializedRows = computeActual("SELECT y FROM test_rename_column");
         assertEquals(getOnlyElement(materializedRows.getMaterializedRows()).getField(0), 123L);
 
-        assertQueryTrue("ALTER TABLE test_rename_column RENAME COLUMN y TO Z");
+        assertUpdate("ALTER TABLE test_rename_column RENAME COLUMN y TO Z");
         materializedRows = computeActual("SELECT z FROM test_rename_column");
         assertEquals(getOnlyElement(materializedRows.getMaterializedRows()).getField(0), 123L);
 
-        assertQueryTrue("DROP TABLE test_rename_column");
+        assertUpdate("DROP TABLE test_rename_column");
         assertFalse(queryRunner.tableExists(getSession(), "test_rename_column"));
+    }
+
+    @Test
+    public void testAddColumn()
+            throws Exception
+    {
+        assertUpdate("CREATE TABLE test_add_column AS SELECT 123 x", 1);
+        assertUpdate("CREATE TABLE test_add_column_a AS SELECT 234 x, 111 a", 1);
+        assertUpdate("CREATE TABLE test_add_column_ab AS SELECT 345 x, 222 a, 33.3 b", 1);
+
+        assertUpdate("ALTER TABLE test_add_column ADD COLUMN a bigint");
+        assertUpdate("INSERT INTO test_add_column SELECT * FROM test_add_column_a", 1);
+        MaterializedResult materializedRows = computeActual("SELECT x, a FROM test_add_column ORDER BY x");
+        assertEquals(materializedRows.getMaterializedRows().get(0).getField(0), 123L);
+        assertEquals(materializedRows.getMaterializedRows().get(0).getField(1), null);
+        assertEquals(materializedRows.getMaterializedRows().get(1).getField(0), 234L);
+        assertEquals(materializedRows.getMaterializedRows().get(1).getField(1), 111L);
+
+        assertUpdate("ALTER TABLE test_add_column ADD COLUMN b double");
+        assertUpdate("INSERT INTO test_add_column SELECT * FROM test_add_column_ab", 1);
+        materializedRows = computeActual("SELECT x, a, b FROM test_add_column ORDER BY x");
+        assertEquals(materializedRows.getMaterializedRows().get(0).getField(0), 123L);
+        assertEquals(materializedRows.getMaterializedRows().get(0).getField(1), null);
+        assertEquals(materializedRows.getMaterializedRows().get(0).getField(2), null);
+        assertEquals(materializedRows.getMaterializedRows().get(1).getField(0), 234L);
+        assertEquals(materializedRows.getMaterializedRows().get(1).getField(1), 111L);
+        assertEquals(materializedRows.getMaterializedRows().get(1).getField(2), null);
+        assertEquals(materializedRows.getMaterializedRows().get(2).getField(0), 345L);
+        assertEquals(materializedRows.getMaterializedRows().get(2).getField(1), 222L);
+        assertEquals(materializedRows.getMaterializedRows().get(2).getField(2), 33.3);
+
+        assertUpdate("DROP TABLE test_add_column");
+        assertUpdate("DROP TABLE test_add_column_a");
+        assertUpdate("DROP TABLE test_add_column_ab");
+        assertFalse(queryRunner.tableExists(getSession(), "test_add_column"));
+        assertFalse(queryRunner.tableExists(getSession(), "test_add_column_a"));
+        assertFalse(queryRunner.tableExists(getSession(), "test_add_column_ab"));
     }
 
     @Test
@@ -230,14 +305,25 @@ public abstract class AbstractTestDistributedQueries
     {
         @Language("SQL") String query = "SELECT orderdate, orderkey FROM orders";
 
-        assertQuery("CREATE TABLE test_insert AS " + query, "SELECT count(*) FROM orders");
+        assertUpdate("CREATE TABLE test_insert AS " + query + " WITH NO DATA", 0);
+        assertQuery("SELECT count(*) FROM test_insert", "SELECT 0");
+
+        assertUpdate("INSERT INTO test_insert " + query, "SELECT count(*) FROM orders");
+
         assertQuery("SELECT * FROM test_insert", query);
 
-        assertQuery("INSERT INTO test_insert " + query, "SELECT count(*) FROM orders");
+        assertUpdate("INSERT INTO test_insert (orderkey) VALUES (-1)", 1);
+        assertUpdate("INSERT INTO test_insert (orderdate) VALUES (DATE '2001-01-01')", 1);
+        assertUpdate("INSERT INTO test_insert (orderkey, orderdate) VALUES (-2, DATE '2001-01-02')", 1);
+        assertUpdate("INSERT INTO test_insert (orderdate, orderkey) VALUES (DATE '2001-01-03', -3)", 1);
 
-        assertQuery("SELECT * FROM test_insert", query + " UNION ALL " + query);
+        assertQuery("SELECT * FROM test_insert", query
+                + " UNION ALL SELECT null, -1"
+                + " UNION ALL SELECT DATE '2001-01-01', null"
+                + " UNION ALL SELECT DATE '2001-01-02', -2"
+                + " UNION ALL SELECT DATE '2001-01-03', -3");
 
-        assertQueryTrue("DROP TABLE test_insert");
+        assertUpdate("DROP TABLE test_insert");
     }
 
     @Test
@@ -246,98 +332,93 @@ public abstract class AbstractTestDistributedQueries
     {
         // delete half the table, then delete the rest
 
-        assertQuery("CREATE TABLE test_delete AS SELECT * FROM orders", "SELECT count(*) FROM orders");
+        assertUpdate("CREATE TABLE test_delete AS SELECT * FROM orders", "SELECT count(*) FROM orders");
 
-        assertQuery("DELETE FROM test_delete WHERE orderkey % 2 = 0", "SELECT count(*) FROM orders WHERE orderkey % 2 = 0");
+        assertUpdate("DELETE FROM test_delete WHERE orderkey % 2 = 0", "SELECT count(*) FROM orders WHERE orderkey % 2 = 0");
         assertQuery("SELECT * FROM test_delete", "SELECT * FROM orders WHERE orderkey % 2 <> 0");
 
-        assertQuery("DELETE FROM test_delete", "SELECT count(*) FROM orders WHERE orderkey % 2 <> 0");
+        assertUpdate("DELETE FROM test_delete", "SELECT count(*) FROM orders WHERE orderkey % 2 <> 0");
         assertQuery("SELECT * FROM test_delete", "SELECT * FROM orders LIMIT 0");
 
-        assertQueryTrue("DROP TABLE test_delete");
+        assertUpdate("DROP TABLE test_delete");
 
         // delete successive parts of the table
 
-        assertQuery("CREATE TABLE test_delete AS SELECT * FROM orders", "SELECT count(*) FROM orders");
+        assertUpdate("CREATE TABLE test_delete AS SELECT * FROM orders", "SELECT count(*) FROM orders");
 
-        assertQuery("DELETE FROM test_delete WHERE custkey <= 100", "SELECT count(*) FROM orders WHERE custkey <= 100");
+        assertUpdate("DELETE FROM test_delete WHERE custkey <= 100", "SELECT count(*) FROM orders WHERE custkey <= 100");
         assertQuery("SELECT * FROM test_delete", "SELECT * FROM orders WHERE custkey > 100");
 
-        assertQuery("DELETE FROM test_delete WHERE custkey <= 300", "SELECT count(*) FROM orders WHERE custkey > 100 AND custkey <= 300");
+        assertUpdate("DELETE FROM test_delete WHERE custkey <= 300", "SELECT count(*) FROM orders WHERE custkey > 100 AND custkey <= 300");
         assertQuery("SELECT * FROM test_delete", "SELECT * FROM orders WHERE custkey > 300");
 
-        assertQuery("DELETE FROM test_delete WHERE custkey <= 500", "SELECT count(*) FROM orders WHERE custkey > 300 AND custkey <= 500");
+        assertUpdate("DELETE FROM test_delete WHERE custkey <= 500", "SELECT count(*) FROM orders WHERE custkey > 300 AND custkey <= 500");
         assertQuery("SELECT * FROM test_delete", "SELECT * FROM orders WHERE custkey > 500");
 
-        assertQueryTrue("DROP TABLE test_delete");
+        assertUpdate("DROP TABLE test_delete");
 
         // delete using a constant property
 
-        assertQuery("CREATE TABLE test_delete AS SELECT * FROM orders", "SELECT count(*) FROM orders");
+        assertUpdate("CREATE TABLE test_delete AS SELECT * FROM orders", "SELECT count(*) FROM orders");
 
-        assertQuery("DELETE FROM test_delete WHERE orderstatus = 'O'", "SELECT count(*) FROM orders WHERE orderstatus = 'O'");
+        assertUpdate("DELETE FROM test_delete WHERE orderstatus = 'O'", "SELECT count(*) FROM orders WHERE orderstatus = 'O'");
         assertQuery("SELECT * FROM test_delete", "SELECT * FROM orders WHERE orderstatus <> 'O'");
 
-        assertQueryTrue("DROP TABLE test_delete");
+        assertUpdate("DROP TABLE test_delete");
 
         // delete without matching any rows
 
-        assertQuery("CREATE TABLE test_delete AS SELECT * FROM orders", "SELECT count(*) FROM orders");
-        assertQuery("DELETE FROM test_delete WHERE rand() < 0", "SELECT 0");
-        assertQueryTrue("DROP TABLE test_delete");
-    }
+        assertUpdate("CREATE TABLE test_delete AS SELECT * FROM orders", "SELECT count(*) FROM orders");
+        assertUpdate("DELETE FROM test_delete WHERE rand() < 0", 0);
+        assertUpdate("DROP TABLE test_delete");
 
-    @Test
-    public void testDeleteSemiJoin()
-            throws Exception
-    {
         // delete using a subquery
 
-        assertQuery("CREATE TABLE test_delete_semi_join AS SELECT * FROM lineitem", "SELECT count(*) FROM lineitem");
+        assertUpdate("CREATE TABLE test_delete AS SELECT * FROM lineitem", "SELECT count(*) FROM lineitem");
 
-        assertQuery(
-                "DELETE FROM test_delete_semi_join WHERE orderkey IN (SELECT orderkey FROM orders WHERE orderstatus = 'F')",
+        assertUpdate(
+                "DELETE FROM test_delete WHERE orderkey IN (SELECT orderkey FROM orders WHERE orderstatus = 'F')",
                 "SELECT count(*) FROM lineitem WHERE orderkey IN (SELECT orderkey FROM orders WHERE orderstatus = 'F')");
         assertQuery(
-                "SELECT * FROM test_delete_semi_join",
+                "SELECT * FROM test_delete",
                 "SELECT * FROM lineitem WHERE orderkey IN (SELECT orderkey FROM orders WHERE orderstatus <> 'F')");
 
-        assertQueryTrue("DROP TABLE test_delete_semi_join");
+        assertUpdate("DROP TABLE test_delete");
 
         // delete with multiple SemiJoin
 
-        assertQuery("CREATE TABLE test_delete_semi_join AS SELECT * FROM lineitem", "SELECT count(*) FROM lineitem");
+        assertUpdate("CREATE TABLE test_delete AS SELECT * FROM lineitem", "SELECT count(*) FROM lineitem");
 
-        assertQuery(
-                "DELETE FROM test_delete_semi_join\n" +
-                "WHERE orderkey IN (SELECT orderkey FROM orders WHERE orderstatus = 'F')\n" +
-                "  AND orderkey IN (SELECT orderkey FROM orders WHERE custkey % 5 = 0)\n",
+        assertUpdate(
+                "DELETE FROM test_delete\n" +
+                        "WHERE orderkey IN (SELECT orderkey FROM orders WHERE orderstatus = 'F')\n" +
+                        "  AND orderkey IN (SELECT orderkey FROM orders WHERE custkey % 5 = 0)\n",
                 "SELECT count(*) FROM lineitem\n" +
-                "WHERE orderkey IN (SELECT orderkey FROM orders WHERE orderstatus = 'F')\n" +
-                "  AND orderkey IN (SELECT orderkey FROM orders WHERE custkey % 5 = 0)");
+                        "WHERE orderkey IN (SELECT orderkey FROM orders WHERE orderstatus = 'F')\n" +
+                        "  AND orderkey IN (SELECT orderkey FROM orders WHERE custkey % 5 = 0)");
         assertQuery(
-                "SELECT * FROM test_delete_semi_join",
+                "SELECT * FROM test_delete",
                 "SELECT * FROM lineitem\n" +
-                "WHERE orderkey IN (SELECT orderkey FROM orders WHERE orderstatus <> 'F')\n" +
-                "  OR orderkey IN (SELECT orderkey FROM orders WHERE custkey % 5 <> 0)");
+                        "WHERE orderkey IN (SELECT orderkey FROM orders WHERE orderstatus <> 'F')\n" +
+                        "  OR orderkey IN (SELECT orderkey FROM orders WHERE custkey % 5 <> 0)");
 
-        assertQueryTrue("DROP TABLE test_delete_semi_join");
+        assertUpdate("DROP TABLE test_delete");
 
         // delete with SemiJoin null handling
 
-        assertQuery("CREATE TABLE test_delete_semi_join AS SELECT * FROM orders", "SELECT count(*) FROM orders");
+        assertUpdate("CREATE TABLE test_delete AS SELECT * FROM orders", "SELECT count(*) FROM orders");
 
-        assertQuery(
-                "DELETE FROM test_delete_semi_join\n" +
+        assertUpdate(
+                "DELETE FROM test_delete\n" +
                         "WHERE (orderkey IN (SELECT CASE WHEN orderkey % 3 = 0 THEN NULL ELSE orderkey END FROM lineitem)) IS NULL\n",
                 "SELECT count(*) FROM orders\n" +
                         "WHERE (orderkey IN (SELECT CASE WHEN orderkey % 3 = 0 THEN NULL ELSE orderkey END FROM lineitem)) IS NULL\n");
         assertQuery(
-                "SELECT * FROM test_delete_semi_join",
+                "SELECT * FROM test_delete",
                 "SELECT * FROM orders\n" +
                         "WHERE (orderkey IN (SELECT CASE WHEN orderkey % 3 = 0 THEN NULL ELSE orderkey END FROM lineitem)) IS NOT NULL\n");
 
-        assertQueryTrue("DROP TABLE test_delete_semi_join");
+        assertUpdate("DROP TABLE test_delete");
     }
 
     @Test
@@ -345,7 +426,7 @@ public abstract class AbstractTestDistributedQueries
             throws Exception
     {
         assertFalse(queryRunner.tableExists(getSession(), "test_drop_if_exists"));
-        assertQueryTrue("DROP TABLE IF EXISTS test_drop_if_exists");
+        assertUpdate("DROP TABLE IF EXISTS test_drop_if_exists");
         assertFalse(queryRunner.tableExists(getSession(), "test_drop_if_exists"));
     }
 
@@ -355,8 +436,8 @@ public abstract class AbstractTestDistributedQueries
     {
         @Language("SQL") String query = "SELECT orderkey, orderstatus, totalprice / 2 half FROM orders";
 
-        assertQueryTrue("CREATE VIEW test_view AS SELECT 123 x");
-        assertQueryTrue("CREATE OR REPLACE VIEW test_view AS " + query);
+        assertUpdate("CREATE VIEW test_view AS SELECT 123 x");
+        assertUpdate("CREATE OR REPLACE VIEW test_view AS " + query);
 
         assertQuery("SELECT * FROM test_view", query);
 
@@ -366,10 +447,10 @@ public abstract class AbstractTestDistributedQueries
 
         assertQuery("WITH orders AS (SELECT * FROM orders LIMIT 0) SELECT * FROM test_view", query);
 
-        String name = format("%s.%s.test_view", getSession().getCatalog(), getSession().getSchema());
+        String name = format("%s.%s.test_view", getSession().getCatalog().get(), getSession().getSchema().get());
         assertQuery("SELECT * FROM " + name, query);
 
-        assertQueryTrue("DROP VIEW test_view");
+        assertUpdate("DROP VIEW test_view");
     }
 
     @Test
@@ -377,12 +458,12 @@ public abstract class AbstractTestDistributedQueries
             throws Exception
     {
         @Language("SQL") String query = "SELECT 123 x, 'foo' y";
-        assertQueryTrue("CREATE VIEW meta_test_view AS " + query);
+        assertUpdate("CREATE VIEW meta_test_view AS " + query);
 
         // test INFORMATION_SCHEMA.TABLES
         MaterializedResult actual = computeActual(format(
                 "SELECT table_name, table_type FROM information_schema.tables WHERE table_schema = '%s'",
-                getSession().getSchema()));
+                getSession().getSchema().get()));
 
         MaterializedResult expected = resultBuilder(getSession(), actual.getTypes())
                 .row("customer", "BASE TABLE")
@@ -412,7 +493,7 @@ public abstract class AbstractTestDistributedQueries
         // test INFORMATION_SCHEMA.VIEWS
         actual = computeActual(format(
                 "SELECT table_name, view_definition FROM information_schema.views WHERE table_schema = '%s'",
-                getSession().getSchema()));
+                getSession().getSchema().get()));
 
         expected = resultBuilder(getSession(), actual.getTypes())
                 .row("meta_test_view", formatSql(new SqlParser().createStatement(query)))
@@ -423,14 +504,14 @@ public abstract class AbstractTestDistributedQueries
         // test SHOW COLUMNS
         actual = computeActual("SHOW COLUMNS FROM meta_test_view");
 
-        expected = resultBuilder(getSession(), VARCHAR, VARCHAR, BOOLEAN, BOOLEAN, VARCHAR)
-                .row("x", "bigint", true, false, "")
-                .row("y", "varchar", true, false, "")
+        expected = resultBuilder(getSession(), VARCHAR, VARCHAR, VARCHAR)
+                .row("x", "bigint", "")
+                .row("y", "varchar(3)", "")
                 .build();
 
         assertEquals(actual, expected);
 
-        assertQueryTrue("DROP VIEW meta_test_view");
+        assertUpdate("DROP VIEW meta_test_view");
     }
 
     @Test
@@ -445,8 +526,7 @@ public abstract class AbstractTestDistributedQueries
             throws Exception
     {
         MaterializedResult result = computeActual("SHOW SCHEMAS FROM tpch");
-        ImmutableSet<String> schemaNames = ImmutableSet.copyOf(transform(result.getMaterializedRows(), onlyColumnGetter()));
-        assertTrue(schemaNames.containsAll(ImmutableSet.of(INFORMATION_SCHEMA, "tiny", "sf1")));
+        assertTrue(result.getOnlyColumnAsSet().containsAll(ImmutableSet.of(INFORMATION_SCHEMA, "tiny", "sf1")));
     }
 
     @Test
@@ -494,9 +574,9 @@ public abstract class AbstractTestDistributedQueries
     public void testSymbolAliasing()
             throws Exception
     {
-        assertQueryTrue("CREATE TABLE test_symbol_aliasing AS SELECT 1 foo_1, 2 foo_2_4");
+        assertUpdate("CREATE TABLE test_symbol_aliasing AS SELECT 1 foo_1, 2 foo_2_4", 1);
         assertQuery("SELECT foo_1, foo_2_4 FROM test_symbol_aliasing", "SELECT 1, 2");
-        assertQueryTrue("DROP TABLE test_symbol_aliasing");
+        assertUpdate("DROP TABLE test_symbol_aliasing");
     }
 
     private void assertTableColumnNames(String tableName, String... columnNames)

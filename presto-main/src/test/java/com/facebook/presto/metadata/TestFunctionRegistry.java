@@ -17,6 +17,7 @@ import com.facebook.presto.block.BlockEncodingManager;
 import com.facebook.presto.operator.scalar.CustomFunctions;
 import com.facebook.presto.operator.scalar.ScalarFunction;
 import com.facebook.presto.spi.type.StandardTypes;
+import com.facebook.presto.spi.type.TypeSignature;
 import com.facebook.presto.sql.tree.QualifiedName;
 import com.facebook.presto.type.SqlType;
 import com.facebook.presto.type.TypeRegistry;
@@ -46,8 +47,8 @@ public class TestFunctionRegistry
     {
         TypeRegistry typeManager = new TypeRegistry();
         FunctionRegistry registry = new FunctionRegistry(typeManager, new BlockEncodingManager(typeManager), true);
-        FunctionInfo exactOperator = registry.getCoercion(HYPER_LOG_LOG, HYPER_LOG_LOG);
-        assertEquals(exactOperator.getSignature().getName(), mangleOperatorName(OperatorType.CAST.name()));
+        Signature exactOperator = registry.getCoercion(HYPER_LOG_LOG, HYPER_LOG_LOG);
+        assertEquals(exactOperator.getName(), mangleOperatorName(OperatorType.CAST.name()));
         assertEquals(transform(exactOperator.getArgumentTypes(), Functions.toStringFunction()), ImmutableList.of(StandardTypes.HYPER_LOG_LOG));
         assertEquals(exactOperator.getReturnType().getBase(), StandardTypes.HYPER_LOG_LOG);
     }
@@ -58,16 +59,19 @@ public class TestFunctionRegistry
         TypeRegistry typeManager = new TypeRegistry();
         FunctionRegistry registry = new FunctionRegistry(typeManager, new BlockEncodingManager(typeManager), true);
         boolean foundOperator = false;
-        for (ParametricFunction function : registry.listOperators()) {
+        for (SqlFunction function : registry.listOperators()) {
             OperatorType operatorType = unmangleOperator(function.getSignature().getName());
             if (operatorType == OperatorType.CAST) {
                 continue;
             }
-            if (function.isUnbound()) {
+            if (!function.getSignature().getTypeParameterRequirements().isEmpty()) {
                 continue;
             }
-            FunctionInfo exactOperator = registry.resolveOperator(operatorType, resolveTypes(function.getSignature().getArgumentTypes(), typeManager));
-            assertEquals(exactOperator.getSignature(), function.getSignature());
+            if (function.getSignature().getArgumentTypes().stream().anyMatch(TypeSignature::isCalculated)) {
+                continue;
+            }
+            Signature exactOperator = registry.resolveOperator(operatorType, resolveTypes(function.getSignature().getArgumentTypes(), typeManager));
+            assertEquals(exactOperator, function.getSignature());
             foundOperator = true;
         }
         assertTrue(foundOperator);
@@ -83,7 +87,7 @@ public class TestFunctionRegistry
 
         TypeRegistry typeManager = new TypeRegistry();
         FunctionRegistry registry = new FunctionRegistry(typeManager, new BlockEncodingManager(typeManager), true);
-        FunctionInfo function = registry.resolveFunction(QualifiedName.of(signature.getName()), signature.getArgumentTypes(), false);
+        Signature function = registry.resolveFunction(QualifiedName.of(signature.getName()), signature.getArgumentTypes(), false);
         assertEquals(function.getArgumentTypes(), ImmutableList.of(parseTypeSignature(StandardTypes.BIGINT)));
         assertEquals(signature.getReturnType().getBase(), StandardTypes.TIMESTAMP_WITH_TIME_ZONE);
     }
@@ -91,7 +95,7 @@ public class TestFunctionRegistry
     @Test(expectedExceptions = IllegalArgumentException.class, expectedExceptionsMessageRegExp = "\\QFunction already registered: custom_add(bigint,bigint):bigint\\E")
     public void testDuplicateFunctions()
     {
-        List<ParametricFunction> functions = new FunctionListBuilder(new TypeRegistry())
+        List<SqlFunction> functions = new FunctionListBuilder(new TypeRegistry())
                 .scalar(CustomFunctions.class)
                 .getFunctions()
                 .stream()
@@ -108,7 +112,7 @@ public class TestFunctionRegistry
     public void testConflictingScalarAggregation()
             throws Exception
     {
-        List<ParametricFunction> functions = new FunctionListBuilder(new TypeRegistry())
+        List<SqlFunction> functions = new FunctionListBuilder(new TypeRegistry())
                 .scalar(ScalarSum.class)
                 .getFunctions();
 
@@ -123,7 +127,7 @@ public class TestFunctionRegistry
     {
         TypeRegistry typeManager = new TypeRegistry();
         FunctionRegistry registry = new FunctionRegistry(typeManager, new BlockEncodingManager(typeManager), true);
-        List<ParametricFunction> functions = registry.list();
+        List<SqlFunction> functions = registry.list();
         List<String> names = transform(functions, input -> input.getSignature().getName());
 
         assertTrue(names.contains("length"), "Expected function names " + names + " to contain 'length'");

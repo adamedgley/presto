@@ -18,6 +18,7 @@ import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.ConnectorSplit;
 import com.facebook.presto.spi.RecordCursor;
 import com.facebook.presto.spi.RecordSet;
+import com.facebook.presto.spi.connector.ConnectorTransactionHandle;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.tpch.TpchColumnHandle;
 import com.facebook.presto.tpch.TpchMetadata;
@@ -31,7 +32,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class SampledTpchRecordSetProvider
         extends TpchRecordSetProvider
@@ -46,7 +47,7 @@ public class SampledTpchRecordSetProvider
     }
 
     @Override
-    public RecordSet getRecordSet(ConnectorSession session, ConnectorSplit split, List<? extends ColumnHandle> columns)
+    public RecordSet getRecordSet(ConnectorTransactionHandle transaction, ConnectorSession session, ConnectorSplit split, List<? extends ColumnHandle> columns)
     {
         int sampleWeightField = -1;
         for (int i = 0; i < columns.size(); i++) {
@@ -64,17 +65,15 @@ public class SampledTpchRecordSetProvider
                 // Pick a random column, so that we can figure out how many rows there are
                 TpchSplit tpchSplit = (TpchSplit) split;
                 ColumnHandle column = Iterables.getFirst(metadata.getColumnHandles(session, tpchSplit.getTableHandle()).values(), null);
-                checkNotNull(column, "Could not find any columns");
-                recordSet = new EmptyRecordSet(super.getRecordSet(session, split, ImmutableList.of(column)));
+                requireNonNull(column, "Could not find any columns");
+                recordSet = new EmptyRecordSet(super.getRecordSet(transaction, session, split, ImmutableList.of(column)));
             }
             else {
-                recordSet = super.getRecordSet(session, split, delegatedColumns);
+                recordSet = super.getRecordSet(transaction, session, split, delegatedColumns);
             }
             return new SampledTpchRecordSet(recordSet, sampleWeightField, sampleWeight);
         }
-        else {
-            return super.getRecordSet(session, split, columns);
-        }
+        return super.getRecordSet(transaction, session, split, columns);
     }
 
     private static class EmptyRecordSet
@@ -232,9 +231,7 @@ public class SampledTpchRecordSetProvider
             if (field == sampleWeightField) {
                 return false;
             }
-            else {
-                return delegate.isNull(field);
-            }
+            return delegate.isNull(field);
         }
 
         @Override
@@ -249,9 +246,7 @@ public class SampledTpchRecordSetProvider
             if (field == sampleWeightField) {
                 return sampleWeight;
             }
-            else {
-                return delegate.getLong(field);
-            }
+            return delegate.getLong(field);
         }
 
         @Override
@@ -296,9 +291,7 @@ public class SampledTpchRecordSetProvider
             if (field == sampleWeightField) {
                 return BIGINT;
             }
-            else {
-                return delegate.getType(field);
-            }
+            return delegate.getType(field);
         }
 
         @Override

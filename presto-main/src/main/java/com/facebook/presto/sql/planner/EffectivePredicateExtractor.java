@@ -14,9 +14,8 @@
 package com.facebook.presto.sql.planner;
 
 import com.facebook.presto.spi.ColumnHandle;
-import com.facebook.presto.spi.Domain;
-import com.facebook.presto.spi.SortedRangeSet;
-import com.facebook.presto.spi.TupleDomain;
+import com.facebook.presto.spi.predicate.Domain;
+import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.planner.plan.AggregationNode;
 import com.facebook.presto.sql.planner.plan.DistinctLimitNode;
@@ -33,7 +32,6 @@ import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.facebook.presto.sql.planner.plan.TopNNode;
 import com.facebook.presto.sql.planner.plan.UnionNode;
 import com.facebook.presto.sql.planner.plan.WindowNode;
-import com.facebook.presto.sql.tree.BooleanLiteral;
 import com.facebook.presto.sql.tree.ComparisonExpression;
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.QualifiedNameReference;
@@ -58,9 +56,11 @@ import static com.facebook.presto.sql.ExpressionUtils.expressionOrNullSymbols;
 import static com.facebook.presto.sql.ExpressionUtils.extractConjuncts;
 import static com.facebook.presto.sql.ExpressionUtils.stripNonDeterministicConjuncts;
 import static com.facebook.presto.sql.planner.EqualityInference.createEqualityInference;
+import static com.facebook.presto.sql.tree.BooleanLiteral.TRUE_LITERAL;
 import static com.facebook.presto.util.ImmutableCollectors.toImmutableList;
 import static com.google.common.base.Predicates.in;
 import static com.google.common.collect.Iterables.transform;
+import static java.util.stream.Collectors.toList;
 
 /**
  * Computes the effective predicate at the top of the specified PlanNode
@@ -96,7 +96,7 @@ public class EffectivePredicateExtractor
     @Override
     protected Expression visitPlan(PlanNode node, Void context)
     {
-        return BooleanLiteral.TRUE_LITERAL;
+        return TRUE_LITERAL;
     }
 
     @Override
@@ -176,9 +176,7 @@ public class EffectivePredicateExtractor
     public Expression visitTableScan(TableScanNode node, Void context)
     {
         Map<ColumnHandle, Symbol> assignments = ImmutableBiMap.copyOf(node.getAssignments()).inverse();
-        return DomainTranslator.toPredicate(
-                spanTupleDomain(node.getCurrentConstraint()).transform(assignments::get),
-                symbolTypes);
+        return DomainTranslator.toPredicate(spanTupleDomain(node.getCurrentConstraint()).transform(assignments::get));
     }
 
     private static TupleDomain<ColumnHandle> spanTupleDomain(TupleDomain<ColumnHandle> tupleDomain)
@@ -187,15 +185,10 @@ public class EffectivePredicateExtractor
             return tupleDomain;
         }
 
-        // Retain nullability, but collapse each SortedRangeSet into a single span
-        Map<ColumnHandle, Domain> spannedDomains = Maps.transformValues(tupleDomain.getDomains(), domain -> Domain.create(getSortedRangeSpan(domain.getRanges()), domain.isNullAllowed()));
+        // Simplify domains if they get too complex
+        Map<ColumnHandle, Domain> spannedDomains = Maps.transformValues(tupleDomain.getDomains().get(), DomainUtils::simplifyDomain);
 
         return TupleDomain.withColumnDomains(spannedDomains);
-    }
-
-    private static SortedRangeSet getSortedRangeSpan(SortedRangeSet rangeSet)
-    {
-        return rangeSet.isNone() ? SortedRangeSet.none(rangeSet.getType()) : SortedRangeSet.of(rangeSet.getSpan());
     }
 
     @Override
@@ -231,7 +224,6 @@ public class EffectivePredicateExtractor
 
         switch (node.getType()) {
             case INNER:
-            case CROSS:
                 return combineConjuncts(ImmutableList.<Expression>builder()
                         .add(leftPredicate)
                         .add(rightPredicate)
@@ -240,24 +232,33 @@ public class EffectivePredicateExtractor
             case LEFT:
                 return combineConjuncts(ImmutableList.<Expression>builder()
                         .add(leftPredicate)
-                        .addAll(transform(extractConjuncts(rightPredicate), expressionOrNullSymbols(in(node.getRight().getOutputSymbols()))))
-                        .addAll(transform(joinConjuncts, expressionOrNullSymbols(in(node.getRight().getOutputSymbols()))))
+                        .addAll(pullNullableConjunctsThroughOuterJoin(extractConjuncts(rightPredicate), in(node.getRight().getOutputSymbols())))
+                        .addAll(pullNullableConjunctsThroughOuterJoin(joinConjuncts, in(node.getRight().getOutputSymbols())))
                         .build());
             case RIGHT:
                 return combineConjuncts(ImmutableList.<Expression>builder()
                         .add(rightPredicate)
-                        .addAll(transform(extractConjuncts(leftPredicate), expressionOrNullSymbols(in(node.getLeft().getOutputSymbols()))))
-                        .addAll(transform(joinConjuncts, expressionOrNullSymbols(in(node.getLeft().getOutputSymbols()))))
+                        .addAll(pullNullableConjunctsThroughOuterJoin(extractConjuncts(leftPredicate), in(node.getLeft().getOutputSymbols())))
+                        .addAll(pullNullableConjunctsThroughOuterJoin(joinConjuncts, in(node.getLeft().getOutputSymbols())))
                         .build());
             case FULL:
                 return combineConjuncts(ImmutableList.<Expression>builder()
-                        .addAll(transform(extractConjuncts(leftPredicate), expressionOrNullSymbols(in(node.getLeft().getOutputSymbols()))))
-                        .addAll(transform(extractConjuncts(rightPredicate), expressionOrNullSymbols(in(node.getRight().getOutputSymbols()))))
-                        .addAll(transform(joinConjuncts, expressionOrNullSymbols(in(node.getLeft().getOutputSymbols()), in(node.getRight().getOutputSymbols()))))
+                        .addAll(pullNullableConjunctsThroughOuterJoin(extractConjuncts(leftPredicate), in(node.getLeft().getOutputSymbols())))
+                        .addAll(pullNullableConjunctsThroughOuterJoin(extractConjuncts(rightPredicate), in(node.getRight().getOutputSymbols())))
+                        .addAll(pullNullableConjunctsThroughOuterJoin(joinConjuncts, in(node.getLeft().getOutputSymbols()), in(node.getRight().getOutputSymbols())))
                         .build());
             default:
                 throw new UnsupportedOperationException("Unknown join type: " + node.getType());
         }
+    }
+
+    private Iterable<Expression> pullNullableConjunctsThroughOuterJoin(List<Expression> conjuncts, com.google.common.base.Predicate<Symbol>... nullSymbolScopes)
+    {
+        // Conjuncts without any symbol dependencies cannot be applied to the effective predicate (e.g. FALSE literal)
+        conjuncts = conjuncts.stream()
+                .map(expression -> DependencyExtractor.extractAll(expression).isEmpty() ? TRUE_LITERAL : expression)
+                .collect(toList());
+        return transform(conjuncts, expressionOrNullSymbols(nullSymbolScopes));
     }
 
     @Override

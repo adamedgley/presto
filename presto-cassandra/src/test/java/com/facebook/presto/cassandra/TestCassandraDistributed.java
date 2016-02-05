@@ -38,6 +38,13 @@ public class TestCassandraDistributed
     }
 
     @Override
+    public void testAddColumn()
+            throws Exception
+    {
+        // Cassandra does not support adding columns
+    }
+
+    @Override
     public void testRenameColumn()
             throws Exception
     {
@@ -74,13 +81,6 @@ public class TestCassandraDistributed
 
     @Override
     public void testDelete()
-            throws Exception
-    {
-        // Cassandra connector currently does not support delete
-    }
-
-    @Override
-    public void testDeleteSemiJoin()
             throws Exception
     {
         // Cassandra connector currently does not support delete

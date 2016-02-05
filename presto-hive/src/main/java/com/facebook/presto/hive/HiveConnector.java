@@ -14,12 +14,12 @@
 package com.facebook.presto.hive;
 
 import com.facebook.presto.spi.Connector;
-import com.facebook.presto.spi.ConnectorHandleResolver;
 import com.facebook.presto.spi.ConnectorMetadata;
+import com.facebook.presto.spi.ConnectorPageSinkProvider;
 import com.facebook.presto.spi.ConnectorPageSourceProvider;
-import com.facebook.presto.spi.ConnectorRecordSinkProvider;
 import com.facebook.presto.spi.ConnectorSplitManager;
 import com.facebook.presto.spi.SystemTable;
+import com.facebook.presto.spi.security.ConnectorAccessControl;
 import com.facebook.presto.spi.session.PropertyMetadata;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
@@ -29,7 +29,7 @@ import io.airlift.log.Logger;
 import java.util.List;
 import java.util.Set;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class HiveConnector
         implements Connector
@@ -40,32 +40,32 @@ public class HiveConnector
     private final ConnectorMetadata metadata;
     private final ConnectorSplitManager splitManager;
     private final ConnectorPageSourceProvider pageSourceProvider;
-    private final ConnectorRecordSinkProvider recordSinkProvider;
-    private final ConnectorHandleResolver handleResolver;
+    private final ConnectorPageSinkProvider pageSinkProvider;
     private final Set<SystemTable> systemTables;
     private final List<PropertyMetadata<?>> sessionProperties;
     private final List<PropertyMetadata<?>> tableProperties;
+    private final ConnectorAccessControl accessControl;
 
     public HiveConnector(
             LifeCycleManager lifeCycleManager,
             ConnectorMetadata metadata,
             ConnectorSplitManager splitManager,
             ConnectorPageSourceProvider pageSourceProvider,
-            ConnectorRecordSinkProvider recordSinkProvider,
-            ConnectorHandleResolver handleResolver,
+            ConnectorPageSinkProvider pageSinkProvider,
             Set<SystemTable> systemTables,
             List<PropertyMetadata<?>> sessionProperties,
-            List<PropertyMetadata<?>> tableProperties)
+            List<PropertyMetadata<?>> tableProperties,
+            ConnectorAccessControl accessControl)
     {
-        this.lifeCycleManager = checkNotNull(lifeCycleManager, "lifeCycleManager is null");
-        this.metadata = checkNotNull(metadata, "metadata is null");
-        this.splitManager = checkNotNull(splitManager, "splitManager is null");
-        this.pageSourceProvider = checkNotNull(pageSourceProvider, "pageSourceProvider is null");
-        this.recordSinkProvider = checkNotNull(recordSinkProvider, "recordSinkProvider is null");
-        this.handleResolver = checkNotNull(handleResolver, "handleResolver is null");
-        this.systemTables = ImmutableSet.copyOf(checkNotNull(systemTables, "systemTables is null"));
-        this.sessionProperties = ImmutableList.copyOf(checkNotNull(sessionProperties, "sessionProperties is null"));
-        this.tableProperties = ImmutableList.copyOf(checkNotNull(tableProperties, "tableProperties is null"));
+        this.lifeCycleManager = requireNonNull(lifeCycleManager, "lifeCycleManager is null");
+        this.metadata = requireNonNull(metadata, "metadata is null");
+        this.splitManager = requireNonNull(splitManager, "splitManager is null");
+        this.pageSourceProvider = requireNonNull(pageSourceProvider, "pageSourceProvider is null");
+        this.pageSinkProvider = requireNonNull(pageSinkProvider, "pageSinkProvider is null");
+        this.systemTables = ImmutableSet.copyOf(requireNonNull(systemTables, "systemTables is null"));
+        this.sessionProperties = ImmutableList.copyOf(requireNonNull(sessionProperties, "sessionProperties is null"));
+        this.tableProperties = ImmutableList.copyOf(requireNonNull(tableProperties, "tableProperties is null"));
+        this.accessControl = requireNonNull(accessControl, "accessControl is null");
     }
 
     @Override
@@ -87,15 +87,9 @@ public class HiveConnector
     }
 
     @Override
-    public ConnectorRecordSinkProvider getRecordSinkProvider()
+    public ConnectorPageSinkProvider getPageSinkProvider()
     {
-        return recordSinkProvider;
-    }
-
-    @Override
-    public ConnectorHandleResolver getHandleResolver()
-    {
-        return handleResolver;
+        return pageSinkProvider;
     }
 
     @Override
@@ -114,6 +108,12 @@ public class HiveConnector
     public List<PropertyMetadata<?>> getTableProperties()
     {
         return tableProperties;
+    }
+
+    @Override
+    public ConnectorAccessControl getAccessControl()
+    {
+        return accessControl;
     }
 
     @Override

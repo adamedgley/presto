@@ -14,6 +14,8 @@
 package com.facebook.presto.verifier;
 
 import com.facebook.presto.jdbc.PrestoConnection;
+import com.facebook.presto.jdbc.PrestoResultSet;
+import com.facebook.presto.spi.type.SqlVarbinary;
 import com.facebook.presto.verifier.Validator.ChangedRow.Changed;
 import com.google.common.base.Joiner;
 import com.google.common.base.Stopwatch;
@@ -47,16 +49,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.TimeUnit;
-import java.util.regex.Pattern;
+import java.util.function.Function;
 
 import static com.facebook.presto.verifier.QueryResult.State;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Strings.nullToEmpty;
 import static com.google.common.primitives.Doubles.isFinite;
 import static io.airlift.units.Duration.nanosSince;
 import static java.lang.String.format;
 import static java.util.Collections.unmodifiableList;
+import static java.util.Objects.requireNonNull;
 
 public class Validator
 {
@@ -70,43 +72,54 @@ public class Validator
     private final Duration testTimeout;
     private final int maxRowCount;
     private final boolean checkCorrectness;
+    private final boolean checkDeterministic;
     private final boolean verboseResultsComparison;
     private final QueryPair queryPair;
     private final boolean explainOnly;
     private final Map<String, String> sessionProperties;
+    private final int precision;
 
     private Boolean valid;
 
     private QueryResult controlResult;
     private QueryResult testResult;
 
+    private final List<QueryResult> controlPreQueryResults = new ArrayList<>();
+    private final List<QueryResult> controlPostQueryResults = new ArrayList<>();
+    private final List<QueryResult> testPreQueryResults = new ArrayList<>();
+    private final List<QueryResult> testPostQueryResults = new ArrayList<>();
+
     private boolean deterministic = true;
 
-    public Validator(VerifierConfig config, QueryPair queryPair)
+    public Validator(
+            String controlGateway,
+            String testGateway,
+            Duration controlTimeout,
+            Duration testTimeout,
+            int maxRowCount,
+            boolean explainOnly,
+            int precision,
+            boolean checkCorrectness,
+            boolean checkDeterministic,
+            boolean verboseResultsComparison,
+            QueryPair queryPair)
     {
-        checkNotNull(config, "config is null");
-        this.testUsername = checkNotNull(queryPair.getTest().getUsername(), "test username is null");
-        this.controlUsername = checkNotNull(queryPair.getControl().getUsername(), "control username is null");
+        this.testUsername = requireNonNull(queryPair.getTest().getUsername(), "test username is null");
+        this.controlUsername = requireNonNull(queryPair.getControl().getUsername(), "control username is null");
         this.testPassword = queryPair.getTest().getPassword();
         this.controlPassword = queryPair.getControl().getPassword();
-        this.controlGateway = checkNotNull(config.getControlGateway(), "controlGateway is null");
-        this.testGateway = checkNotNull(config.getTestGateway(), "testGateway is null");
-        this.controlTimeout = config.getControlTimeout();
-        this.testTimeout = config.getTestTimeout();
-        this.maxRowCount = config.getMaxRowCount();
-        this.explainOnly = config.isExplainOnly();
-        // Check if either the control query or the test query matches the regex
-        if (Pattern.matches(config.getSkipCorrectnessRegex(), queryPair.getTest().getQuery()) ||
-                Pattern.matches(config.getSkipCorrectnessRegex(), queryPair.getControl().getQuery())) {
-            // If so disable correctness checking
-            this.checkCorrectness = false;
-        }
-        else {
-            this.checkCorrectness = config.isCheckCorrectnessEnabled();
-        }
-        this.verboseResultsComparison = config.isVerboseResultsComparison();
+        this.controlGateway = requireNonNull(controlGateway, "controlGateway is null");
+        this.testGateway = requireNonNull(testGateway, "testGateway is null");
+        this.controlTimeout = controlTimeout;
+        this.testTimeout = testTimeout;
+        this.maxRowCount = maxRowCount;
+        this.explainOnly = explainOnly;
+        this.precision = precision;
+        this.checkCorrectness = checkCorrectness;
+        this.checkDeterministic = checkDeterministic;
+        this.verboseResultsComparison = verboseResultsComparison;
 
-        this.queryPair = checkNotNull(queryPair, "queryPair is null");
+        this.queryPair = requireNonNull(queryPair, "queryPair is null");
         // Test and Control always have the same session properties.
         this.sessionProperties = queryPair.getTest().getSessionProperties();
     }
@@ -180,22 +193,22 @@ public class Validator
 
     private boolean validate()
     {
-        controlResult = executeQuery(controlGateway, controlUsername, controlPassword, queryPair.getControl(), controlTimeout, sessionProperties);
+        controlResult = executeQueryControl();
 
         // query has too many rows. Consider blacklisting.
         if (controlResult.getState() == State.TOO_MANY_ROWS) {
-            testResult = new QueryResult(State.INVALID, null, null, ImmutableList.<List<Object>>of());
+            testResult = new QueryResult(State.INVALID, null, null, null, ImmutableList.<List<Object>>of());
             return false;
         }
         // query failed in the control
-        else if (controlResult.getState() != State.SUCCESS) {
-            testResult = new QueryResult(State.INVALID, null, null, ImmutableList.<List<Object>>of());
+        if (controlResult.getState() != State.SUCCESS) {
+            testResult = new QueryResult(State.INVALID, null, null, null, ImmutableList.<List<Object>>of());
             return true;
         }
 
-        testResult = executeQuery(testGateway, testUsername, testPassword, queryPair.getTest(), testTimeout, sessionProperties);
+        testResult = executeQueryTest();
 
-        if ((controlResult.getState() != State.SUCCESS) || (testResult.getState() != State.SUCCESS)) {
+        if (controlResult.getState() != State.SUCCESS || testResult.getState() != State.SUCCESS) {
             return false;
         }
 
@@ -203,25 +216,116 @@ public class Validator
             return true;
         }
 
-        if (resultsMatch(controlResult, testResult)) {
-            return true;
+        boolean matches = resultsMatch(controlResult, testResult, precision);
+        if (!matches && checkDeterministic) {
+            return checkForDeterministicAndRerunTestQueriesIfNeeded();
+        }
+        return matches;
+    }
+
+    private static QueryResult tearDown(Query query, List<QueryResult> postQueryResults, Function<String, QueryResult> executor)
+    {
+        postQueryResults.clear();
+        for (String postqueryString : query.getPostQueries()) {
+            QueryResult queryResult = executor.apply(postqueryString);
+            postQueryResults.add(queryResult);
+            if (queryResult.getState() != State.SUCCESS) {
+                return new QueryResult(State.FAILED_TO_TEARDOWN, queryResult.getException(), queryResult.getWallTime(), queryResult.getCpuTime(), ImmutableList.<List<Object>>of());
+            }
         }
 
+        return new QueryResult(State.SUCCESS, null, null, null, ImmutableList.of());
+    }
+
+    private static QueryResult setup(Query query, List<QueryResult> preQueryResults, Function<String, QueryResult> executor)
+    {
+        preQueryResults.clear();
+        for (String prequeryString : query.getPreQueries()) {
+            QueryResult queryResult = executor.apply(prequeryString);
+            preQueryResults.add(queryResult);
+            if (queryResult.getState() != State.SUCCESS) {
+                return new QueryResult(State.FAILED_TO_SETUP, queryResult.getException(), queryResult.getWallTime(), queryResult.getCpuTime(), ImmutableList.<List<Object>>of());
+            }
+        }
+
+        return new QueryResult(State.SUCCESS, null, null, null, ImmutableList.of());
+    }
+
+    private boolean checkForDeterministicAndRerunTestQueriesIfNeeded()
+    {
         // check if the control query is deterministic
         for (int i = 0; i < 3; i++) {
-            QueryResult results = executeQuery(controlGateway, controlUsername, controlPassword, queryPair.getControl(), controlTimeout, sessionProperties);
+            QueryResult results = executeQueryControl();
             if (results.getState() != State.SUCCESS) {
                 return false;
             }
 
-            if (!resultsMatch(controlResult, results)) {
+            if (!resultsMatch(controlResult, results, precision)) {
                 deterministic = false;
                 return false;
             }
         }
 
-        // query is deterministic and result don't match
-        return false;
+        // Re-run the test query to confirm that the results don't match, in case there was caching on the test tier,
+        // but require that it matches 3 times in a row to rule out a non-deterministic correctness bug.
+        for (int i = 0; i < 3; i++) {
+            testResult = executeQueryTest();
+            if (testResult.getState() != State.SUCCESS) {
+                return false;
+            }
+            if (!resultsMatch(controlResult, testResult, precision)) {
+                return false;
+            }
+        }
+
+        // test result agrees with control result 3 times in a row although the first test result didn't agree
+        return true;
+    }
+
+    private QueryResult executeQueryTest()
+    {
+        Query query = queryPair.getTest();
+        QueryResult queryResult = new QueryResult(State.INVALID, null, null, null, ImmutableList.<List<Object>>of());
+        try {
+            // startup
+            queryResult = setup(query, testPreQueryResults, testPrequery -> executeQuery(testGateway, testUsername, testPassword, queryPair.getTest(), testPrequery, testTimeout, sessionProperties));
+
+            // if startup is successful -> execute query
+            if (queryResult.getState() == State.SUCCESS) {
+                queryResult = executeQuery(testGateway, testUsername, testPassword, queryPair.getTest(), query.getQuery(), testTimeout, sessionProperties);
+            }
+        }
+        finally {
+            // teardown no matter what
+            QueryResult tearDownResult = tearDown(query, testPostQueryResults, testPostquery -> executeQuery(testGateway, testUsername, testPassword, queryPair.getTest(), testPostquery, testTimeout, sessionProperties));
+
+            // if teardown is not successful the query fails
+            queryResult = tearDownResult.getState() == State.SUCCESS ? queryResult : tearDownResult;
+        }
+        return queryResult;
+    }
+
+    private QueryResult executeQueryControl()
+    {
+        Query query = queryPair.getControl();
+        QueryResult queryResult = new QueryResult(State.INVALID, null, null, null, ImmutableList.<List<Object>>of());
+        try {
+            // startup
+            queryResult = setup(query, controlPreQueryResults, controlPrequery -> executeQuery(controlGateway, controlUsername, controlPassword, queryPair.getControl(), controlPrequery, controlTimeout, sessionProperties));
+
+            // if startup is successful -> execute query
+            if (queryResult.getState() == State.SUCCESS) {
+                queryResult = executeQuery(controlGateway, controlUsername, controlPassword, queryPair.getControl(), query.getQuery(), controlTimeout, sessionProperties);
+            }
+        }
+        finally {
+            // teardown no matter what
+            QueryResult tearDownResult = tearDown(query, controlPostQueryResults, controlPostquery -> executeQuery(controlGateway, controlUsername, controlPassword, queryPair.getControl(), controlPostquery, controlTimeout, sessionProperties));
+
+            // if teardown is not successful the query fails
+            queryResult = tearDownResult.getState() == State.SUCCESS ? queryResult : tearDownResult;
+        }
+        return queryResult;
     }
 
     public QueryPair getQueryPair()
@@ -239,7 +343,36 @@ public class Validator
         return testResult;
     }
 
-    private QueryResult executeQuery(String url, String username, String password, Query query, Duration timeout, Map<String, String> sessionProperties)
+    public List<QueryResult> getControlPreQueryResults()
+    {
+        return controlPreQueryResults;
+    }
+
+    public List<QueryResult> getControlPostQueryResults()
+    {
+        return controlPostQueryResults;
+    }
+
+    public List<QueryResult> getTestPreQueryResults()
+    {
+        return testPreQueryResults;
+    }
+
+    public List<QueryResult> getTestPostQueryResults()
+    {
+        return testPostQueryResults;
+    }
+
+    private static Duration getCpuTime(ResultSet resultSet)
+            throws SQLException
+    {
+        if (resultSet.isWrapperFor(PrestoResultSet.class)) {
+            return new Duration(resultSet.unwrap(PrestoResultSet.class).getStats().getCpuTimeMillis(), TimeUnit.MILLISECONDS);
+        }
+        return null;
+    }
+
+    private QueryResult executeQuery(String url, String username, String password, Query query, String sql, Duration timeout, Map<String, String> sessionProperties)
     {
         try (Connection connection = DriverManager.getConnection(url, username, password)) {
             trySetConnectionProperties(query, connection);
@@ -252,17 +385,24 @@ public class Validator
                 TimeLimiter limiter = new SimpleTimeLimiter();
                 Stopwatch stopwatch = Stopwatch.createStarted();
                 Statement limitedStatement = limiter.newProxy(statement, Statement.class, timeout.toMillis(), TimeUnit.MILLISECONDS);
-                String sql = query.getQuery();
                 if (explainOnly) {
                     sql = "EXPLAIN " + sql;
                 }
-                try (final ResultSet resultSet = limitedStatement.executeQuery(sql)) {
-                    List<List<Object>> results = limiter.callWithTimeout(getResultSetConverter(resultSet), timeout.toMillis() - stopwatch.elapsed(TimeUnit.MILLISECONDS), TimeUnit.MILLISECONDS, true);
-                    return new QueryResult(State.SUCCESS, null, nanosSince(start), results);
+                try {
+                    if (limitedStatement.execute(sql)) {
+                        List<List<Object>> results = limiter.callWithTimeout(
+                                getResultSetConverter(limitedStatement.getResultSet()),
+                                timeout.toMillis() - stopwatch.elapsed(TimeUnit.MILLISECONDS),
+                                TimeUnit.MILLISECONDS, true);
+                        return new QueryResult(State.SUCCESS, null, nanosSince(start), getCpuTime(limitedStatement.getResultSet()), results);
+                    }
+                    else {
+                        return new QueryResult(State.SUCCESS, null, nanosSince(start), null, null);
+                    }
                 }
                 catch (AssertionError e) {
                     if (e.getMessage().startsWith("unimplemented type:")) {
-                        return new QueryResult(State.INVALID, null, null, ImmutableList.<List<Object>>of());
+                        return new QueryResult(State.INVALID, null, null, null, ImmutableList.<List<Object>>of());
                     }
                     throw e;
                 }
@@ -270,7 +410,7 @@ public class Validator
                     throw e;
                 }
                 catch (UncheckedTimeoutException e) {
-                    return new QueryResult(State.TIMEOUT, null, null, ImmutableList.<List<Object>>of());
+                    return new QueryResult(State.TIMEOUT, null, null, null, ImmutableList.<List<Object>>of());
                 }
                 catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
@@ -288,10 +428,10 @@ public class Validator
                 exception = (Exception) e.getCause();
             }
             State state = isPrestoQueryInvalid(e) ? State.INVALID : State.FAILED;
-            return new QueryResult(state, exception, null, null);
+            return new QueryResult(state, exception, null, null, null);
         }
         catch (VerifierException e) {
-            return new QueryResult(State.TOO_MANY_ROWS, e, null, null);
+            return new QueryResult(State.TOO_MANY_ROWS, e, null, null, null);
         }
     }
 
@@ -310,16 +450,9 @@ public class Validator
         }
     }
 
-    private Callable<List<List<Object>>> getResultSetConverter(final ResultSet resultSet)
+    private Callable<List<List<Object>>> getResultSetConverter(ResultSet resultSet)
     {
-        return new Callable<List<List<Object>>>() {
-            @Override
-            public List<List<Object>> call()
-                    throws Exception
-            {
-                return convertJdbcResultSet(resultSet);
-            }
-        };
+        return () -> convertJdbcResultSet(resultSet);
     }
 
     private static boolean isPrestoQueryInvalid(SQLException e)
@@ -360,6 +493,9 @@ public class Validator
                 if (object instanceof Array) {
                     object = ((Array) object).getArray();
                 }
+                if (object instanceof byte[]) {
+                    object = new SqlVarbinary((byte[]) object);
+                }
                 row.add(object);
             }
             rows.add(unmodifiableList(row));
@@ -371,10 +507,10 @@ public class Validator
         return rows.build();
     }
 
-    private static boolean resultsMatch(QueryResult controlResult, QueryResult testResult)
+    private static boolean resultsMatch(QueryResult controlResult, QueryResult testResult, int precision)
     {
-        SortedMultiset<List<Object>> control = ImmutableSortedMultiset.copyOf(rowComparator(), controlResult.getResults());
-        SortedMultiset<List<Object>> test = ImmutableSortedMultiset.copyOf(rowComparator(), testResult.getResults());
+        SortedMultiset<List<Object>> control = ImmutableSortedMultiset.copyOf(rowComparator(precision), controlResult.getResults());
+        SortedMultiset<List<Object>> test = ImmutableSortedMultiset.copyOf(rowComparator(precision), testResult.getResults());
         try {
             return control.equals(test);
         }
@@ -383,7 +519,7 @@ public class Validator
         }
     }
 
-    public String getResultsComparison()
+    public String getResultsComparison(int precision)
     {
         List<List<Object>> controlResults = controlResult.getResults();
         List<List<Object>> testResults = testResult.getResults();
@@ -392,13 +528,13 @@ public class Validator
             return "";
         }
 
-        Multiset<List<Object>> control = ImmutableSortedMultiset.copyOf(rowComparator(), controlResults);
-        Multiset<List<Object>> test = ImmutableSortedMultiset.copyOf(rowComparator(), testResults);
+        Multiset<List<Object>> control = ImmutableSortedMultiset.copyOf(rowComparator(precision), controlResults);
+        Multiset<List<Object>> test = ImmutableSortedMultiset.copyOf(rowComparator(precision), testResults);
 
         try {
             Iterable<ChangedRow> diff = ImmutableSortedMultiset.<ChangedRow>naturalOrder()
-                    .addAll(Iterables.transform(Multisets.difference(control, test), row -> new ChangedRow(Changed.REMOVED, row)))
-                    .addAll(Iterables.transform(Multisets.difference(test, control), row -> new ChangedRow(Changed.ADDED, row)))
+                    .addAll(Iterables.transform(Multisets.difference(control, test), row -> new ChangedRow(Changed.REMOVED, row, precision)))
+                    .addAll(Iterables.transform(Multisets.difference(test, control), row -> new ChangedRow(Changed.ADDED, row, precision)))
                     .build();
             diff = Iterables.limit(diff, 100);
 
@@ -419,67 +555,56 @@ public class Validator
         }
     }
 
-    private static Comparator<List<Object>> rowComparator()
+    private static Comparator<List<Object>> rowComparator(int precision)
     {
-        final Comparator<Object> comparator = Ordering.from(columnComparator()).nullsFirst();
-        return new Comparator<List<Object>>()
-        {
-            @Override
-            public int compare(List<Object> a, List<Object> b)
-            {
-                if (a.size() != b.size()) {
-                    return Integer.compare(a.size(), b.size());
-                }
-                for (int i = 0; i < a.size(); i++) {
-                    int r = comparator.compare(a.get(i), b.get(i));
-                    if (r != 0) {
-                        return r;
-                    }
-                }
-                return 0;
+        Comparator<Object> comparator = Ordering.from(columnComparator(precision)).nullsFirst();
+        return (a, b) -> {
+            if (a.size() != b.size()) {
+                return Integer.compare(a.size(), b.size());
             }
+            for (int i = 0; i < a.size(); i++) {
+                int r = comparator.compare(a.get(i), b.get(i));
+                if (r != 0) {
+                    return r;
+                }
+            }
+            return 0;
         };
     }
 
-    private static Comparator<Object> columnComparator()
+    private static Comparator<Object> columnComparator(int precision)
     {
-        return new Comparator<Object>()
-        {
-            @SuppressWarnings("unchecked")
-            @Override
-            public int compare(Object a, Object b)
-            {
-                if (a instanceof Number && b instanceof Number) {
-                    Number x = (Number) a;
-                    Number y = (Number) b;
-                    boolean bothReal = isReal(x) && isReal(y);
-                    boolean bothIntegral = isIntegral(x) && isIntegral(y);
-                    if (!(bothReal || bothIntegral)) {
-                        throw new TypesDoNotMatchException(format("item types do not match: %s vs %s", a.getClass().getName(), b.getClass().getName()));
-                    }
-                    if (isIntegral(x)) {
-                        return Long.compare(x.longValue(), y.longValue());
-                    }
-                    return precisionCompare(x.doubleValue(), y.doubleValue());
-                }
-                if (a.getClass() != b.getClass()) {
+        return (a, b) -> {
+            if (a instanceof Number && b instanceof Number) {
+                Number x = (Number) a;
+                Number y = (Number) b;
+                boolean bothReal = isReal(x) && isReal(y);
+                boolean bothIntegral = isIntegral(x) && isIntegral(y);
+                if (!(bothReal || bothIntegral)) {
                     throw new TypesDoNotMatchException(format("item types do not match: %s vs %s", a.getClass().getName(), b.getClass().getName()));
                 }
-                if ((a.getClass().isArray() && b.getClass().isArray())) {
-                    if (Arrays.deepEquals((Object[]) a, (Object[]) b)) {
-                        return 0;
-                    }
-                    return Arrays.hashCode((Object[]) a) < Arrays.hashCode((Object[]) b) ? -1 : 1;
+                if (isIntegral(x)) {
+                    return Long.compare(x.longValue(), y.longValue());
                 }
-                if ((a instanceof Map && b instanceof Map)) {
-                    if (a.equals(b)) {
-                        return 0;
-                    }
-                    return a.hashCode() < b.hashCode() ? -1 : 1;
-                }
-                checkArgument(a instanceof Comparable, "item is not Comparable: %s", a.getClass().getName());
-                return ((Comparable<Object>) a).compareTo(b);
+                return precisionCompare(x.doubleValue(), y.doubleValue(), precision);
             }
+            if (a.getClass() != b.getClass()) {
+                throw new TypesDoNotMatchException(format("item types do not match: %s vs %s", a.getClass().getName(), b.getClass().getName()));
+            }
+            if ((a.getClass().isArray() && b.getClass().isArray())) {
+                if (Arrays.deepEquals((Object[]) a, (Object[]) b)) {
+                    return 0;
+                }
+                return Arrays.hashCode((Object[]) a) < Arrays.hashCode((Object[]) b) ? -1 : 1;
+            }
+            if ((a instanceof Map && b instanceof Map)) {
+                if (a.equals(b)) {
+                    return 0;
+                }
+                return a.hashCode() < b.hashCode() ? -1 : 1;
+            }
+            checkArgument(a instanceof Comparable, "item is not Comparable: %s", a.getClass().getName());
+            return ((Comparable<Object>) a).compareTo(b);
         };
     }
 
@@ -493,13 +618,13 @@ public class Validator
         return x instanceof Byte || x instanceof Short || x instanceof Integer || x instanceof Long;
     }
 
-    private static int precisionCompare(double a, double b)
+    private static int precisionCompare(double a, double b, int precision)
     {
         if (!isFinite(a) || !isFinite(b)) {
             return Double.compare(a, b);
         }
 
-        MathContext context = new MathContext(5);
+        MathContext context = new MathContext(precision);
         BigDecimal x = new BigDecimal(a).round(context);
         BigDecimal y = new BigDecimal(b).round(context);
         return x.compareTo(y);
@@ -515,11 +640,13 @@ public class Validator
 
         private final Changed changed;
         private final List<Object> row;
+        private final int precision;
 
-        private ChangedRow(Changed changed, List<Object> row)
+        private ChangedRow(Changed changed, List<Object> row, int precision)
         {
             this.changed = changed;
             this.row = row;
+            this.precision = precision;
         }
 
         @Override
@@ -537,7 +664,7 @@ public class Validator
         public int compareTo(ChangedRow that)
         {
             return ComparisonChain.start()
-                    .compare(this.row, that.row, rowComparator())
+                    .compare(this.row, that.row, rowComparator(precision))
                     .compareFalseFirst(this.changed == Changed.ADDED, that.changed == Changed.ADDED)
                     .result();
         }

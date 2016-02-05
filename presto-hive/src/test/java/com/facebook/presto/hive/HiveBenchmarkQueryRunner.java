@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.hive;
 
+import com.facebook.presto.GroupByHashPageIndexerFactory;
 import com.facebook.presto.Session;
 import com.facebook.presto.benchmark.BenchmarkSuite;
 import com.facebook.presto.hive.metastore.InMemoryHiveMetastore;
@@ -30,7 +31,7 @@ import java.io.IOException;
 import java.util.Map;
 
 import static com.facebook.presto.testing.TestingSession.testSessionBuilder;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public final class HiveBenchmarkQueryRunner
 {
@@ -41,7 +42,7 @@ public final class HiveBenchmarkQueryRunner
     public static void main(String[] args)
             throws IOException
     {
-        String outputDirectory = checkNotNull(System.getProperty("outputDirectory"), "Must specify -DoutputDirectory=...");
+        String outputDirectory = requireNonNull(System.getProperty("outputDirectory"), "Must specify -DoutputDirectory=...");
         File tempDir = Files.createTempDir();
         try (LocalQueryRunner localQueryRunner = createLocalQueryRunner(tempDir)) {
             new BenchmarkSuite(localQueryRunner, outputDirectory).runAllBenchmarks();
@@ -75,7 +76,8 @@ public final class HiveBenchmarkQueryRunner
                 ImmutableMap.of("node.environment", "test"),
                 HiveBenchmarkQueryRunner.class.getClassLoader(),
                 metastore,
-                new TypeRegistry());
+                new TypeRegistry(),
+                new GroupByHashPageIndexerFactory());
 
         Map<String, String> hiveCatalogConfig = ImmutableMap.<String, String>builder()
                 .put("hive.metastore.uri", "thrift://none.invalid:0")

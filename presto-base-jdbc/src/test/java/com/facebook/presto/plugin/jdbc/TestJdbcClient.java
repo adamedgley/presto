@@ -56,7 +56,10 @@ public class TestJdbcClient
             throws Exception
     {
         assertTrue(jdbcClient.getSchemaNames().containsAll(ImmutableSet.of("example", "tpch")));
-        assertEquals(jdbcClient.getTableNames("example"), ImmutableList.of(new SchemaTableName("example", "numbers")));
+        assertEquals(jdbcClient.getTableNames("example"), ImmutableList.of(
+                new SchemaTableName("example", "numbers"),
+                new SchemaTableName("example", "view_source"),
+                new SchemaTableName("example", "view")));
         assertEquals(jdbcClient.getTableNames("tpch"), ImmutableList.of(
                 new SchemaTableName("tpch", "lineitem"),
                 new SchemaTableName("tpch", "orders")));
@@ -71,5 +74,17 @@ public class TestJdbcClient
         assertEquals(jdbcClient.getColumns(table), ImmutableList.of(
                 new JdbcColumnHandle(CONNECTOR_ID, "TEXT", VARCHAR),
                 new JdbcColumnHandle(CONNECTOR_ID, "VALUE", BIGINT)));
+    }
+
+    @Test
+    public void testMetadataWithSchemaPattern()
+            throws Exception
+    {
+        SchemaTableName schemaTableName = new SchemaTableName("exa_ple", "num_ers");
+        JdbcTableHandle table = jdbcClient.getTableHandle(schemaTableName);
+        assertNotNull(table, "table is null");
+        assertEquals(jdbcClient.getColumns(table), ImmutableList.of(
+                new JdbcColumnHandle(CONNECTOR_ID, "TE_T", VARCHAR),
+                new JdbcColumnHandle(CONNECTOR_ID, "VA%UE", BIGINT)));
     }
 }

@@ -42,8 +42,8 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.concurrent.TimeUnit;
 
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.io.Resources.getResource;
+import static java.util.Objects.requireNonNull;
 
 @Path("/")
 public class QueryExecutionResource
@@ -56,8 +56,17 @@ public class QueryExecutionResource
     @Inject
     public QueryExecutionResource(QueryManager manager)
     {
-        checkNotNull(manager, "manager is null");
+        requireNonNull(manager, "manager is null");
         this.manager = manager;
+    }
+
+    @GET
+    @Path("/ui/plan")
+    @Produces(MediaType.TEXT_HTML)
+    public String getPlanUi()
+            throws IOException
+    {
+        return Resources.toString(getResource(getClass(), "plan.html"), StandardCharsets.UTF_8);
     }
 
     @GET
@@ -102,7 +111,7 @@ public class QueryExecutionResource
                     }
                 }
 
-                long last = System.currentTimeMillis();
+                long last = TimeUnit.NANOSECONDS.toMillis(System.nanoTime());
                 if (task.getStats().getEndTime() != null) {
                     last = task.getStats().getEndTime().getMillis();
                 }

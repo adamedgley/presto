@@ -19,12 +19,14 @@ import com.facebook.presto.hive.orc.DwrfPageSourceFactory;
 import com.facebook.presto.hive.orc.DwrfRecordCursorProvider;
 import com.facebook.presto.hive.orc.OrcPageSourceFactory;
 import com.facebook.presto.hive.orc.OrcRecordCursorProvider;
+import com.facebook.presto.hive.parquet.ParquetPageSourceFactory;
+import com.facebook.presto.hive.parquet.ParquetRecordCursorProvider;
 import com.facebook.presto.hive.rcfile.RcFilePageSourceFactory;
-import com.facebook.presto.spi.ConnectorHandleResolver;
 import com.facebook.presto.spi.ConnectorMetadata;
+import com.facebook.presto.spi.ConnectorPageSinkProvider;
 import com.facebook.presto.spi.ConnectorPageSourceProvider;
-import com.facebook.presto.spi.ConnectorRecordSinkProvider;
 import com.facebook.presto.spi.ConnectorSplitManager;
+import com.facebook.presto.spi.PageIndexerFactory;
 import com.facebook.presto.spi.type.TypeManager;
 import com.google.inject.Binder;
 import com.google.inject.Module;
@@ -38,6 +40,7 @@ import java.util.concurrent.ExecutorService;
 
 import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static io.airlift.configuration.ConfigBinder.configBinder;
+import static io.airlift.json.JsonCodecBinder.jsonCodecBinder;
 import static java.util.concurrent.Executors.newCachedThreadPool;
 import static java.util.concurrent.Executors.newFixedThreadPool;
 import static org.weakref.jmx.ObjectNames.generatedNameOf;
@@ -49,12 +52,14 @@ public class HiveClientModule
     private final String connectorId;
     private final HiveMetastore metastore;
     private final TypeManager typeManager;
+    private final PageIndexerFactory pageIndexerFactory;
 
-    public HiveClientModule(String connectorId, HiveMetastore metastore, TypeManager typeManager)
+    public HiveClientModule(String connectorId, HiveMetastore metastore, TypeManager typeManager, PageIndexerFactory pageIndexerFactory)
     {
         this.connectorId = connectorId;
         this.metastore = metastore;
         this.typeManager = typeManager;
+        this.pageIndexerFactory = pageIndexerFactory;
     }
 
     @Override
@@ -88,6 +93,7 @@ public class HiveClientModule
         configBinder(binder).bindConfig(StaticMetastoreConfig.class);
 
         binder.bind(TypeManager.class).toInstance(typeManager);
+        binder.bind(PageIndexerFactory.class).toInstance(pageIndexerFactory);
 
         Multibinder<HiveRecordCursorProvider> recordCursorProviderBinder = Multibinder.newSetBinder(binder, HiveRecordCursorProvider.class);
         recordCursorProviderBinder.addBinding().to(OrcRecordCursorProvider.class).in(Scopes.SINGLETON);
@@ -97,16 +103,20 @@ public class HiveClientModule
         recordCursorProviderBinder.addBinding().to(ColumnarBinaryHiveRecordCursorProvider.class).in(Scopes.SINGLETON);
         recordCursorProviderBinder.addBinding().to(GenericHiveRecordCursorProvider.class).in(Scopes.SINGLETON);
 
+        binder.bind(HivePartitionManager.class).in(Scopes.SINGLETON);
+        binder.bind(LocationService.class).to(HiveLocationService.class).in(Scopes.SINGLETON);
         binder.bind(ConnectorMetadata.class).to(HiveMetadata.class).in(Scopes.SINGLETON);
         binder.bind(ConnectorSplitManager.class).to(HiveSplitManager.class).in(Scopes.SINGLETON);
         binder.bind(ConnectorPageSourceProvider.class).to(HivePageSourceProvider.class).in(Scopes.SINGLETON);
-        binder.bind(ConnectorRecordSinkProvider.class).to(HiveRecordSinkProvider.class).in(Scopes.SINGLETON);
-        binder.bind(ConnectorHandleResolver.class).to(HiveHandleResolver.class).in(Scopes.SINGLETON);
+        binder.bind(ConnectorPageSinkProvider.class).to(HivePageSinkProvider.class).in(Scopes.SINGLETON);
+
+        jsonCodecBinder(binder).bindJsonCodec(PartitionUpdate.class);
 
         Multibinder<HivePageSourceFactory> pageSourceFactoryBinder = Multibinder.newSetBinder(binder, HivePageSourceFactory.class);
         pageSourceFactoryBinder.addBinding().to(RcFilePageSourceFactory.class).in(Scopes.SINGLETON);
         pageSourceFactoryBinder.addBinding().to(OrcPageSourceFactory.class).in(Scopes.SINGLETON);
         pageSourceFactoryBinder.addBinding().to(DwrfPageSourceFactory.class).in(Scopes.SINGLETON);
+        pageSourceFactoryBinder.addBinding().to(ParquetPageSourceFactory.class).in(Scopes.SINGLETON);
 
         binder.bind(PrestoS3FileSystemStats.class).toInstance(PrestoS3FileSystem.getFileSystemStats());
         newExporter(binder).export(PrestoS3FileSystemStats.class).as(generatedNameOf(PrestoS3FileSystem.class, connectorId));

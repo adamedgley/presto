@@ -16,13 +16,14 @@ package com.facebook.presto.operator;
 import com.facebook.presto.execution.SharedBuffer;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.google.common.collect.ImmutableList;
 import com.google.common.util.concurrent.ListenableFuture;
 
 import java.util.List;
 
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
+import static java.util.Objects.requireNonNull;
 
 public class TaskOutputOperator
         implements Operator
@@ -34,13 +35,13 @@ public class TaskOutputOperator
 
         public TaskOutputFactory(SharedBuffer sharedBuffer)
         {
-            this.sharedBuffer = checkNotNull(sharedBuffer, "sharedBuffer is null");
+            this.sharedBuffer = requireNonNull(sharedBuffer, "sharedBuffer is null");
         }
 
         @Override
-        public OperatorFactory createOutputOperator(int operatorId, List<Type> sourceTypes)
+        public OperatorFactory createOutputOperator(int operatorId, PlanNodeId planNodeId, List<Type> sourceTypes)
         {
-            return new TaskOutputOperatorFactory(operatorId, sharedBuffer);
+            return new TaskOutputOperatorFactory(operatorId, planNodeId, sharedBuffer);
         }
     }
 
@@ -48,12 +49,14 @@ public class TaskOutputOperator
             implements OperatorFactory
     {
         private final int operatorId;
+        private final PlanNodeId planNodeId;
         private final SharedBuffer sharedBuffer;
 
-        public TaskOutputOperatorFactory(int operatorId, SharedBuffer sharedBuffer)
+        public TaskOutputOperatorFactory(int operatorId, PlanNodeId planNodeId, SharedBuffer sharedBuffer)
         {
             this.operatorId = operatorId;
-            this.sharedBuffer = checkNotNull(sharedBuffer, "sharedBuffer is null");
+            this.planNodeId = requireNonNull(planNodeId, "planNodeId is null");
+            this.sharedBuffer = requireNonNull(sharedBuffer, "sharedBuffer is null");
         }
 
         @Override
@@ -65,13 +68,19 @@ public class TaskOutputOperator
         @Override
         public Operator createOperator(DriverContext driverContext)
         {
-            OperatorContext operatorContext = driverContext.addOperatorContext(operatorId, TaskOutputOperator.class.getSimpleName());
+            OperatorContext operatorContext = driverContext.addOperatorContext(operatorId, planNodeId, TaskOutputOperator.class.getSimpleName());
             return new TaskOutputOperator(operatorContext, sharedBuffer);
         }
 
         @Override
         public void close()
         {
+        }
+
+        @Override
+        public OperatorFactory duplicate()
+        {
+            return new TaskOutputOperatorFactory(operatorId, planNodeId, sharedBuffer);
         }
     }
 
@@ -82,8 +91,8 @@ public class TaskOutputOperator
 
     public TaskOutputOperator(OperatorContext operatorContext, SharedBuffer sharedBuffer)
     {
-        this.operatorContext = checkNotNull(operatorContext, "operatorContext is null");
-        this.sharedBuffer = checkNotNull(sharedBuffer, "sharedBuffer is null");
+        this.operatorContext = requireNonNull(operatorContext, "operatorContext is null");
+        this.sharedBuffer = requireNonNull(sharedBuffer, "sharedBuffer is null");
     }
 
     @Override
@@ -135,7 +144,10 @@ public class TaskOutputOperator
     @Override
     public void addInput(Page page)
     {
-        checkNotNull(page, "page is null");
+        requireNonNull(page, "page is null");
+        if (page.getPositionCount() == 0) {
+            return;
+        }
         checkState(blocked == NOT_BLOCKED, "output is already blocked");
         ListenableFuture<?> future = sharedBuffer.enqueue(page);
         if (!future.isDone()) {

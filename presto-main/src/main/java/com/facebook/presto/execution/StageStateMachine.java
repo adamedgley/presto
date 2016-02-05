@@ -32,6 +32,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
@@ -42,8 +43,8 @@ import static com.facebook.presto.execution.StageState.FINISHED;
 import static com.facebook.presto.execution.StageState.PLANNED;
 import static com.facebook.presto.execution.StageState.RUNNING;
 import static com.facebook.presto.execution.StageState.SCHEDULED;
-import static com.facebook.presto.execution.StageState.SCHEDULING_SPLITS;
 import static com.facebook.presto.execution.StageState.SCHEDULING;
+import static com.facebook.presto.execution.StageState.SCHEDULING_SPLITS;
 import static com.facebook.presto.execution.StageState.TERMINAL_STAGE_STATES;
 import static io.airlift.units.DataSize.Unit.BYTE;
 import static io.airlift.units.DataSize.succinctDataSize;
@@ -68,6 +69,9 @@ public class StageStateMachine
     private final Distribution getSplitDistribution = new Distribution();
     private final Distribution scheduleTaskDistribution = new Distribution();
     private final Distribution addSplitDistribution = new Distribution();
+
+    private final AtomicLong peakMemory = new AtomicLong();
+    private final AtomicLong currentMemory = new AtomicLong();
 
     public StageStateMachine(StageId stageId, URI location, Session session, PlanFragment fragment, ExecutorService executor)
     {
@@ -123,7 +127,7 @@ public class StageStateMachine
     public synchronized boolean transitionToScheduled()
     {
         schedulingComplete.compareAndSet(null, DateTime.now());
-        return stageState.setIf(SCHEDULED, currentState -> currentState == PLANNED || currentState == SCHEDULING);
+        return stageState.setIf(SCHEDULED, currentState -> currentState == PLANNED || currentState == SCHEDULING || currentState == SCHEDULING_SPLITS);
     }
 
     public boolean transitionToRunning()
@@ -161,6 +165,19 @@ public class StageStateMachine
         return failed;
     }
 
+    public long getPeakMemoryInBytes()
+    {
+        return peakMemory.get();
+    }
+
+    public void updateMemoryUsage(long deltaMemoryInBytes)
+    {
+        long currentMemoryValue = currentMemory.addAndGet(deltaMemoryInBytes);
+        if (currentMemoryValue > peakMemory.get()) {
+            peakMemory.updateAndGet(x -> currentMemoryValue > x ? currentMemoryValue : x);
+        }
+    }
+
     public StageInfo getStageInfo(Supplier<Iterable<TaskInfo>> taskInfosSupplier, Supplier<Iterable<StageInfo>> subStageInfosSupplier)
     {
         // stage state must be captured first in order to provide a
@@ -181,7 +198,9 @@ public class StageStateMachine
         int runningDrivers = 0;
         int completedDrivers = 0;
 
+        long cumulativeMemory = 0;
         long totalMemoryReservation = 0;
+        long peakMemoryReservation = getPeakMemoryInBytes();
 
         long totalScheduledTime = 0;
         long totalCpuTime = 0;
@@ -215,6 +234,7 @@ public class StageStateMachine
             runningDrivers += taskStats.getRunningDrivers();
             completedDrivers += taskStats.getCompletedDrivers();
 
+            cumulativeMemory += taskStats.getCumulativeMemory();
             totalMemoryReservation += taskStats.getMemoryReservation().toBytes();
 
             totalScheduledTime += taskStats.getTotalScheduledTime().roundTo(NANOSECONDS);
@@ -251,7 +271,9 @@ public class StageStateMachine
                 runningDrivers,
                 completedDrivers,
 
+                cumulativeMemory,
                 succinctDataSize(totalMemoryReservation, BYTE),
+                succinctDataSize(peakMemoryReservation, BYTE),
                 succinctDuration(totalScheduledTime, NANOSECONDS),
                 succinctDuration(totalCpuTime, NANOSECONDS),
                 succinctDuration(totalUserTime, NANOSECONDS),

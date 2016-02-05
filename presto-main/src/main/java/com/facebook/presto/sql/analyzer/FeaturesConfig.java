@@ -20,11 +20,17 @@ public class FeaturesConfig
 {
     private boolean experimentalSyntaxEnabled;
     private boolean distributedIndexJoinsEnabled;
-    private boolean distributedJoinsEnabled;
+    private boolean distributedJoinsEnabled = true;
     private boolean redistributeWrites = true;
     private boolean optimizeMetadataQueries;
-    private boolean optimizeHashGeneration;
+    private boolean optimizeHashGeneration = true;
     private boolean optimizeSingleDistinct = true;
+    private boolean pushTableWriteThroughUnion = true;
+    private boolean intermediateAggregationsEnabled = false;
+
+    private boolean columnarProcessing = false;
+    private boolean columnarProcessingDictionary = false;
+    private boolean dictionaryAggregation = false;
 
     @LegacyConfig("analyzer.experimental-syntax-enabled")
     @Config("experimental-syntax-enabled")
@@ -108,6 +114,66 @@ public class FeaturesConfig
     public FeaturesConfig setOptimizeSingleDistinct(boolean optimizeSingleDistinct)
     {
         this.optimizeSingleDistinct = optimizeSingleDistinct;
+        return this;
+    }
+
+    public boolean isPushTableWriteThroughUnion()
+    {
+        return pushTableWriteThroughUnion;
+    }
+
+    @Config("optimizer.push-table-write-through-union")
+    public FeaturesConfig setPushTableWriteThroughUnion(boolean pushTableWriteThroughUnion)
+    {
+        this.pushTableWriteThroughUnion = pushTableWriteThroughUnion;
+        return this;
+    }
+
+    public boolean isIntermediateAggregationsEnabled()
+    {
+        return intermediateAggregationsEnabled;
+    }
+
+    @Config("optimizer.use-intermediate-aggregations")
+    public FeaturesConfig setIntermediateAggregationsEnabled(boolean intermediateAggregationsEnabled)
+    {
+        this.intermediateAggregationsEnabled = intermediateAggregationsEnabled;
+        return this;
+    }
+
+    public boolean isColumnarProcessing()
+    {
+        return columnarProcessing;
+    }
+
+    @Config("optimizer.columnar-processing")
+    public FeaturesConfig setColumnarProcessing(boolean columnarProcessing)
+    {
+        this.columnarProcessing = columnarProcessing;
+        return this;
+    }
+
+    public boolean isColumnarProcessingDictionary()
+    {
+        return columnarProcessingDictionary;
+    }
+
+    @Config("optimizer.columnar-processing-dictionary")
+    public FeaturesConfig setColumnarProcessingDictionary(boolean columnarProcessingDictionary)
+    {
+        this.columnarProcessingDictionary = columnarProcessingDictionary;
+        return this;
+    }
+
+    public boolean isDictionaryAggregation()
+    {
+        return dictionaryAggregation;
+    }
+
+    @Config("optimizer.dictionary-aggregation")
+    public FeaturesConfig setDictionaryAggregation(boolean dictionaryAggregation)
+    {
+        this.dictionaryAggregation = dictionaryAggregation;
         return this;
     }
 }

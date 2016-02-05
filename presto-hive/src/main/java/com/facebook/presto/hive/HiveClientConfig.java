@@ -57,8 +57,13 @@ public class HiveClientConfig
     private int domainCompactionThreshold = 100;
     private boolean forceLocalScheduling;
     private boolean recursiveDirWalkerEnabled;
+
+    private int maxConcurrentFileRenames = 20;
+
+    private boolean allowAddColumn;
     private boolean allowDropTable;
     private boolean allowRenameTable;
+    private boolean allowRenameColumn;
 
     private boolean allowCorruptWritesForTesting;
 
@@ -78,6 +83,7 @@ public class HiveClientConfig
     private String s3AwsSecretKey;
     private boolean s3UseInstanceCredentials = true;
     private boolean s3SslEnabled = true;
+    private boolean s3SseEnabled;
     private int s3MaxClientRetries = 3;
     private int s3MaxErrorRetries = 10;
     private Duration s3MaxBackoffTime = new Duration(10, TimeUnit.MINUTES);
@@ -89,12 +95,19 @@ public class HiveClientConfig
     private DataSize s3MultipartMinFileSize = new DataSize(16, MEGABYTE);
     private DataSize s3MultipartMinPartSize = new DataSize(5, MEGABYTE);
     private boolean useParquetColumnNames;
+    private boolean pinS3ClientToCurrentRegion;
 
     private HiveStorageFormat hiveStorageFormat = HiveStorageFormat.RCBINARY;
+    private boolean respectTableFormat = true;
+    private boolean immutablePartitions;
+    private int maxPartitionsPerWriter = 100;
 
     private List<String> resourceConfigFiles;
 
     private boolean optimizedReaderEnabled = true;
+    private boolean parquetOptimizedReaderEnabled;
+
+    private boolean parquetPredicatePushdownEnabled;
 
     private boolean assumeCanonicalPartitionKeys;
 
@@ -152,6 +165,19 @@ public class HiveClientConfig
     public HiveClientConfig setForceLocalScheduling(boolean forceLocalScheduling)
     {
         this.forceLocalScheduling = forceLocalScheduling;
+        return this;
+    }
+
+    @Min(1)
+    public int getMaxConcurrentFileRenames()
+    {
+        return maxConcurrentFileRenames;
+    }
+
+    @Config("hive.max-concurrent-file-renames")
+    public HiveClientConfig setMaxConcurrentFileRenames(int maxConcurrentFileRenames)
+    {
+        this.maxConcurrentFileRenames = maxConcurrentFileRenames;
         return this;
     }
 
@@ -237,6 +263,19 @@ public class HiveClientConfig
         return this;
     }
 
+    public boolean getAllowRenameColumn()
+    {
+        return this.allowRenameColumn;
+    }
+
+    @Config("hive.allow-rename-column")
+    @ConfigDescription("Allow hive connector to rename column")
+    public HiveClientConfig setAllowRenameColumn(boolean allowRenameColumn)
+    {
+        this.allowRenameColumn = allowRenameColumn;
+        return this;
+    }
+
     @Deprecated
     public boolean getAllowCorruptWritesForTesting()
     {
@@ -249,6 +288,19 @@ public class HiveClientConfig
     public HiveClientConfig setAllowCorruptWritesForTesting(boolean allowCorruptWritesForTesting)
     {
         this.allowCorruptWritesForTesting = allowCorruptWritesForTesting;
+        return this;
+    }
+
+    public boolean getAllowAddColumn()
+    {
+        return this.allowAddColumn;
+    }
+
+    @Config("hive.allow-add-column")
+    @ConfigDescription("Allow Hive connector to add column")
+    public HiveClientConfig setAllowAddColumn(boolean allowAddColumn)
+    {
+        this.allowAddColumn = allowAddColumn;
         return this;
     }
 
@@ -426,6 +478,46 @@ public class HiveClientConfig
         return this;
     }
 
+    public boolean isRespectTableFormat()
+    {
+        return respectTableFormat;
+    }
+
+    @Config("hive.respect-table-format")
+    @ConfigDescription("Should new partitions be written using the existing table format or the default Presto format")
+    public HiveClientConfig setRespectTableFormat(boolean respectTableFormat)
+    {
+        this.respectTableFormat = respectTableFormat;
+        return this;
+    }
+
+    public boolean isImmutablePartitions()
+    {
+        return immutablePartitions;
+    }
+
+    @Config("hive.immutable-partitions")
+    @ConfigDescription("Can new data be inserted into existing partitions or existing unpartitioned tables")
+    public HiveClientConfig setImmutablePartitions(boolean immutablePartitions)
+    {
+        this.immutablePartitions = immutablePartitions;
+        return this;
+    }
+
+    @Min(1)
+    public int getMaxPartitionsPerWriter()
+    {
+        return maxPartitionsPerWriter;
+    }
+
+    @Config("hive.max-partitions-per-writers")
+    @ConfigDescription("Maximum number of partitions per writer")
+    public HiveClientConfig setMaxPartitionsPerWriter(int maxPartitionsPerWriter)
+    {
+        this.maxPartitionsPerWriter = maxPartitionsPerWriter;
+        return this;
+    }
+
     public String getDomainSocketPath()
     {
         return domainSocketPath;
@@ -496,6 +588,19 @@ public class HiveClientConfig
     public HiveClientConfig setS3SslEnabled(boolean s3SslEnabled)
     {
         this.s3SslEnabled = s3SslEnabled;
+        return this;
+    }
+
+    public boolean isS3SseEnabled()
+    {
+        return s3SseEnabled;
+    }
+
+    @Config("hive.s3.sse.enabled")
+    @ConfigDescription("Enable S3 server side encryption")
+    public HiveClientConfig setS3SseEnabled(boolean s3SseEnabled)
+    {
+        this.s3SseEnabled = s3SseEnabled;
         return this;
     }
 
@@ -638,6 +743,19 @@ public class HiveClientConfig
         return this;
     }
 
+    public boolean isPinS3ClientToCurrentRegion()
+    {
+        return pinS3ClientToCurrentRegion;
+    }
+
+    @Config("hive.s3.pin-client-to-current-region")
+    @ConfigDescription("Should the S3 client be pinned to the current EC2 region")
+    public HiveClientConfig setPinS3ClientToCurrentRegion(boolean pinS3ClientToCurrentRegion)
+    {
+        this.pinS3ClientToCurrentRegion = pinS3ClientToCurrentRegion;
+        return this;
+    }
+
     @Deprecated
     public boolean isOptimizedReaderEnabled()
     {
@@ -649,6 +767,34 @@ public class HiveClientConfig
     public HiveClientConfig setOptimizedReaderEnabled(boolean optimizedReaderEnabled)
     {
         this.optimizedReaderEnabled = optimizedReaderEnabled;
+        return this;
+    }
+
+    @Deprecated
+    public boolean isParquetPredicatePushdownEnabled()
+    {
+        return parquetPredicatePushdownEnabled;
+    }
+
+    @Deprecated
+    @Config("hive.parquet-predicate-pushdown.enabled")
+    public HiveClientConfig setParquetPredicatePushdownEnabled(boolean parquetPredicatePushdownEnabled)
+    {
+        this.parquetPredicatePushdownEnabled = parquetPredicatePushdownEnabled;
+        return this;
+    }
+
+    @Deprecated
+    public boolean isParquetOptimizedReaderEnabled()
+    {
+        return parquetOptimizedReaderEnabled;
+    }
+
+    @Deprecated
+    @Config("hive.parquet-optimized-reader.enabled")
+    public HiveClientConfig setParquetOptimizedReaderEnabled(boolean parquetOptimizedReaderEnabled)
+    {
+        this.parquetOptimizedReaderEnabled = parquetOptimizedReaderEnabled;
         return this;
     }
 

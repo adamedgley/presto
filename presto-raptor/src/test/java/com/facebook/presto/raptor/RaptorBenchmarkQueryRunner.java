@@ -17,11 +17,9 @@ import com.facebook.presto.Session;
 import com.facebook.presto.benchmark.BenchmarkSuite;
 import com.facebook.presto.block.BlockEncodingManager;
 import com.facebook.presto.metadata.InMemoryNodeManager;
-import com.facebook.presto.metadata.Metadata;
-import com.facebook.presto.metadata.QualifiedTableName;
-import com.facebook.presto.spi.ConnectorFactory;
 import com.facebook.presto.spi.NodeManager;
 import com.facebook.presto.spi.block.BlockEncodingSerde;
+import com.facebook.presto.spi.connector.ConnectorFactory;
 import com.facebook.presto.spi.type.TypeManager;
 import com.facebook.presto.testing.LocalQueryRunner;
 import com.facebook.presto.tpch.TpchConnectorFactory;
@@ -34,8 +32,8 @@ import java.io.IOException;
 import java.util.Map;
 
 import static com.facebook.presto.testing.TestingSession.testSessionBuilder;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.collect.Iterables.getOnlyElement;
+import static java.util.Objects.requireNonNull;
 
 public final class RaptorBenchmarkQueryRunner
 {
@@ -48,7 +46,7 @@ public final class RaptorBenchmarkQueryRunner
     public static void main(String[] args)
             throws IOException
     {
-        String outputDirectory = checkNotNull(System.getProperty("outputDirectory"), "Must specify -DoutputDirectory=...");
+        String outputDirectory = requireNonNull(System.getProperty("outputDirectory"), "Must specify -DoutputDirectory=...");
         try (LocalQueryRunner localQueryRunner = createLocalQueryRunner()) {
             new BenchmarkSuite(localQueryRunner, outputDirectory).runAllBenchmarks();
         }
@@ -57,8 +55,8 @@ public final class RaptorBenchmarkQueryRunner
     public static LocalQueryRunner createLocalQueryRunner()
     {
         Session session = testSessionBuilder()
-                .setCatalog("default")
-                .setSchema("default")
+                .setCatalog("raptor")
+                .setSchema("benchmark")
                 .build();
         LocalQueryRunner localQueryRunner = new LocalQueryRunner(session);
 
@@ -68,13 +66,12 @@ public final class RaptorBenchmarkQueryRunner
 
         // add raptor
         ConnectorFactory raptorConnectorFactory = createRaptorConnectorFactory(TPCH_CACHE_DIR, nodeManager);
-        localQueryRunner.createCatalog("default", raptorConnectorFactory, ImmutableMap.<String, String>of());
+        localQueryRunner.createCatalog("raptor", raptorConnectorFactory, ImmutableMap.of());
 
-        Metadata metadata = localQueryRunner.getMetadata();
-        if (!metadata.getTableHandle(session, new QualifiedTableName("default", "default", "orders")).isPresent()) {
+        if (!localQueryRunner.tableExists(session, "orders")) {
             localQueryRunner.execute("CREATE TABLE orders AS SELECT * FROM tpch.sf1.orders");
         }
-        if (!metadata.getTableHandle(session, new QualifiedTableName("default", "default", "lineitem")).isPresent()) {
+        if (!localQueryRunner.tableExists(session, "lineitem")) {
             localQueryRunner.execute("CREATE TABLE lineitem AS SELECT * FROM tpch.sf1.lineitem");
         }
         return localQueryRunner;

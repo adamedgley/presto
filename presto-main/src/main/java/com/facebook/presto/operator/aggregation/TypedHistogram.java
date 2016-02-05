@@ -13,7 +13,6 @@
  */
 package com.facebook.presto.operator.aggregation;
 
-import com.facebook.presto.ExceededMemoryLimitException;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.BlockBuilderStatus;
@@ -25,13 +24,13 @@ import com.facebook.presto.util.array.LongBigArray;
 import com.google.common.collect.ImmutableList;
 import io.airlift.units.DataSize;
 
+import static com.facebook.presto.ExceededMemoryLimitException.exceededLocalLimit;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
-import static com.facebook.presto.type.TypeUtils.expectedValueSize;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
 import static it.unimi.dsi.fastutil.HashCommon.arraySize;
 import static it.unimi.dsi.fastutil.HashCommon.murmurHash3;
+import static java.util.Objects.requireNonNull;
 
 public class TypedHistogram
 {
@@ -41,9 +40,9 @@ public class TypedHistogram
     private int maxFill;
     private int mask;
 
-    private Type type;
+    private final Type type;
 
-    private BlockBuilder values;
+    private final BlockBuilder values;
     private IntBigArray hashPositions;
     private final LongBigArray counts;
 
@@ -57,7 +56,7 @@ public class TypedHistogram
 
         maxFill = calculateMaxFill(hashSize);
         mask = hashSize - 1;
-        values = this.type.createBlockBuilder(new BlockBuilderStatus(), hashSize, expectedValueSize(type, hashSize));
+        values = this.type.createBlockBuilder(new BlockBuilderStatus(), hashSize);
         hashPositions = new IntBigArray(-1);
         hashPositions.ensureCapacity(hashSize);
         counts = new LongBigArray();
@@ -67,7 +66,7 @@ public class TypedHistogram
     public TypedHistogram(Block block, Type type, int expectedSize)
     {
         this(type, expectedSize);
-        checkNotNull(block, "block is null");
+        requireNonNull(block, "block is null");
         for (int i = 0; i < block.getPositionCount(); i += 2) {
             add(i, block, BIGINT.getLong(block, i + 1));
         }
@@ -133,7 +132,6 @@ public class TypedHistogram
         }
 
         addNewGroup(hashPosition, position, block, count);
-        return;
     }
 
     private void addNewGroup(int hashPosition, int position, Block block, long count)
@@ -148,10 +146,8 @@ public class TypedHistogram
         }
 
         if (getEstimatedSize() > FOUR_MEGABYTES) {
-            throw new ExceededMemoryLimitException(new DataSize(4, MEGABYTE));
+            throw exceededLocalLimit(new DataSize(4, MEGABYTE));
         }
-
-        return;
     }
 
     private void rehash(int size)
@@ -165,7 +161,7 @@ public class TypedHistogram
         for (int i = 0; i < values.getPositionCount(); i++) {
             // find an empty slot for the address
             int hashPosition = getHashPosition(TypeUtils.hashPosition(type, values, i), newMask);
-            while (hashPositions.get(hashPosition) != -1) {
+            while (newHashPositions.get(hashPosition) != -1) {
                 hashPosition = (hashPosition + 1) & newMask;
             }
 

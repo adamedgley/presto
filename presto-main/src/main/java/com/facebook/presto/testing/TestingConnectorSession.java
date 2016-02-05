@@ -13,17 +13,21 @@
  */
 package com.facebook.presto.testing;
 
+import com.facebook.presto.execution.QueryIdGenerator;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.PrestoException;
+import com.facebook.presto.spi.security.Identity;
 import com.facebook.presto.spi.session.PropertyMetadata;
 import com.facebook.presto.spi.type.TimeZoneKey;
 import com.google.common.base.MoreObjects;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.Maps;
 
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_SESSION_PROPERTY;
 import static com.facebook.presto.spi.type.TimeZoneKey.UTC_KEY;
@@ -33,20 +37,21 @@ import static java.util.Objects.requireNonNull;
 public class TestingConnectorSession
         implements ConnectorSession
 {
-    public static final ConnectorSession SESSION = new TestingConnectorSession(
-            "user",
-            UTC_KEY,
-            ENGLISH,
-            System.currentTimeMillis(),
-            ImmutableList.of(),
-            ImmutableMap.of());
+    private static final QueryIdGenerator queryIdGenerator = new QueryIdGenerator();
+    public static final ConnectorSession SESSION = new TestingConnectorSession(ImmutableList.of());
 
-    private final String user;
+    private final String queryId;
+    private final Identity identity;
     private final TimeZoneKey timeZoneKey;
     private final Locale locale;
     private final long startTime;
     private final Map<String, PropertyMetadata<?>> properties;
     private final Map<String, Object> propertyValues;
+
+    public TestingConnectorSession(List<PropertyMetadata<?>> properties)
+    {
+        this("user", UTC_KEY, ENGLISH, System.currentTimeMillis(), properties, ImmutableMap.of());
+    }
 
     public TestingConnectorSession(
             String user,
@@ -56,23 +61,25 @@ public class TestingConnectorSession
             List<PropertyMetadata<?>> propertyMetadatas,
             Map<String, Object> propertyValues)
     {
-        this.user = requireNonNull(user, "user is null");
+        this.queryId = queryIdGenerator.createNextQueryId().toString();
+        this.identity = new Identity(requireNonNull(user, "user is null"), Optional.empty());
         this.timeZoneKey = requireNonNull(timeZoneKey, "timeZoneKey is null");
         this.locale = requireNonNull(locale, "locale is null");
         this.startTime = startTime;
-
-        ImmutableMap.Builder<String, PropertyMetadata<?>> builder = ImmutableMap.builder();
-        for (PropertyMetadata<?> propertyMetadata : propertyMetadatas) {
-            builder.put(propertyMetadata.getName(), propertyMetadata);
-        }
-        this.properties = builder.build();
+        this.properties = Maps.uniqueIndex(propertyMetadatas, PropertyMetadata::getName);
         this.propertyValues = ImmutableMap.copyOf(propertyValues);
     }
 
     @Override
-    public String getUser()
+    public String getQueryId()
     {
-        return user;
+        return queryId;
+    }
+
+    @Override
+    public Identity getIdentity()
+    {
+        return identity;
     }
 
     @Override
@@ -111,11 +118,11 @@ public class TestingConnectorSession
     public String toString()
     {
         return MoreObjects.toStringHelper(this)
-                .add("user", user)
+                .add("user", getUser())
                 .add("timeZoneKey", timeZoneKey)
                 .add("locale", locale)
                 .add("startTime", startTime)
-                .add("properties", properties)
+                .add("properties", propertyValues)
                 .toString();
     }
 }

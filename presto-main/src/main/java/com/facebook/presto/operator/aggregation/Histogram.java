@@ -14,11 +14,9 @@
 package com.facebook.presto.operator.aggregation;
 
 import com.facebook.presto.ExceededMemoryLimitException;
-import com.facebook.presto.byteCode.DynamicClassLoader;
-import com.facebook.presto.metadata.FunctionInfo;
+import com.facebook.presto.bytecode.DynamicClassLoader;
 import com.facebook.presto.metadata.FunctionRegistry;
-import com.facebook.presto.metadata.ParametricAggregation;
-import com.facebook.presto.metadata.Signature;
+import com.facebook.presto.metadata.SqlAggregationFunction;
 import com.facebook.presto.operator.aggregation.state.HistogramState;
 import com.facebook.presto.operator.aggregation.state.HistogramStateFactory;
 import com.facebook.presto.operator.aggregation.state.HistogramStateSerializer;
@@ -46,7 +44,7 @@ import static com.facebook.presto.util.Reflection.methodHandle;
 import static java.lang.String.format;
 
 public class Histogram
-        extends ParametricAggregation
+        extends SqlAggregationFunction
 {
     public static final Histogram HISTOGRAM = new Histogram();
     public static final String NAME = "histogram";
@@ -54,15 +52,11 @@ public class Histogram
     private static final MethodHandle INPUT_FUNCTION = methodHandle(Histogram.class, "input", Type.class, HistogramState.class, Block.class, int.class);
     private static final MethodHandle COMBINE_FUNCTION = methodHandle(Histogram.class, "combine", HistogramState.class, HistogramState.class);
 
-    private static final Signature SIGNATURE = new Signature(NAME, ImmutableList.of(comparableTypeParameter("K")),
-            "map<K,bigint>", ImmutableList.of("K"), false, false);
-
     public static final int EXPECTED_SIZE_FOR_HASHING = 10;
 
-    @Override
-    public Signature getSignature()
+    public Histogram()
     {
-        return SIGNATURE;
+        super(NAME, ImmutableList.of(comparableTypeParameter("K")), "map(K,bigint)", ImmutableList.of("K"));
     }
 
     @Override
@@ -72,13 +66,11 @@ public class Histogram
     }
 
     @Override
-    public FunctionInfo specialize(Map<String, Type> types, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
+    public InternalAggregationFunction specialize(Map<String, Type> types, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
     {
         Type keyType = types.get("K");
         Type valueType = BigintType.BIGINT;
-        Signature signature = new Signature(NAME, new MapType(keyType, valueType).getTypeSignature(), keyType.getTypeSignature());
-        InternalAggregationFunction aggregation = generateAggregation(keyType, valueType);
-        return new FunctionInfo(signature, getDescription(), aggregation);
+        return generateAggregation(keyType, valueType);
     }
 
     private static InternalAggregationFunction generateAggregation(Type keyType, Type valueType)

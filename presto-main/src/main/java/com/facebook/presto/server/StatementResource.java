@@ -23,6 +23,7 @@ import com.facebook.presto.client.StageStats;
 import com.facebook.presto.client.StatementStats;
 import com.facebook.presto.execution.BufferInfo;
 import com.facebook.presto.execution.QueryId;
+import com.facebook.presto.execution.QueryIdGenerator;
 import com.facebook.presto.execution.QueryInfo;
 import com.facebook.presto.execution.QueryManager;
 import com.facebook.presto.execution.QueryState;
@@ -35,6 +36,7 @@ import com.facebook.presto.execution.TaskInfo;
 import com.facebook.presto.metadata.SessionPropertyManager;
 import com.facebook.presto.operator.ExchangeClient;
 import com.facebook.presto.operator.ExchangeClientSupplier;
+import com.facebook.presto.security.AccessControl;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.ErrorCode;
 import com.facebook.presto.spi.Page;
@@ -42,6 +44,7 @@ import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeSignature;
+import com.facebook.presto.transaction.TransactionId;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.AbstractIterator;
 import com.google.common.collect.ImmutableList;
@@ -88,19 +91,21 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_CLEAR_SESSION;
+import static com.facebook.presto.client.PrestoHeaders.PRESTO_CLEAR_TRANSACTION_ID;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_SET_SESSION;
+import static com.facebook.presto.client.PrestoHeaders.PRESTO_STARTED_TRANSACTION_ID;
 import static com.facebook.presto.server.ResourceUtil.assertRequest;
 import static com.facebook.presto.server.ResourceUtil.createSessionForRequest;
 import static com.facebook.presto.spi.StandardErrorCode.INTERNAL_ERROR;
 import static com.facebook.presto.spi.StandardErrorCode.toErrorType;
 import static com.facebook.presto.util.Failures.toFailure;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Strings.isNullOrEmpty;
 import static io.airlift.concurrent.Threads.threadsNamed;
 import static io.airlift.http.client.HttpUriBuilder.uriBuilderFrom;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
 import static java.lang.String.format;
+import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.Executors.newSingleThreadScheduledExecutor;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -115,20 +120,27 @@ public class StatementResource
     private static final long DESIRED_RESULT_BYTES = new DataSize(1, MEGABYTE).toBytes();
 
     private final QueryManager queryManager;
+    private final AccessControl accessControl;
     private final SessionPropertyManager sessionPropertyManager;
     private final ExchangeClientSupplier exchangeClientSupplier;
+    private final QueryIdGenerator queryIdGenerator;
 
     private final ConcurrentMap<QueryId, Query> queries = new ConcurrentHashMap<>();
     private final ScheduledExecutorService queryPurger = newSingleThreadScheduledExecutor(threadsNamed("query-purger"));
 
     @Inject
-    public StatementResource(QueryManager queryManager,
+    public StatementResource(
+            QueryManager queryManager,
+            AccessControl accessControl,
             SessionPropertyManager sessionPropertyManager,
-            ExchangeClientSupplier exchangeClientSupplier)
+            ExchangeClientSupplier exchangeClientSupplier,
+            QueryIdGenerator queryIdGenerator)
     {
-        this.queryManager = checkNotNull(queryManager, "queryManager is null");
-        this.sessionPropertyManager = checkNotNull(sessionPropertyManager, "sessionPropertyManager is null");
-        this.exchangeClientSupplier = checkNotNull(exchangeClientSupplier, "exchangeClientSupplier is null");
+        this.queryManager = requireNonNull(queryManager, "queryManager is null");
+        this.accessControl = requireNonNull(accessControl, "accessControl is null");
+        this.sessionPropertyManager = requireNonNull(sessionPropertyManager, "sessionPropertyManager is null");
+        this.exchangeClientSupplier = requireNonNull(exchangeClientSupplier, "exchangeClientSupplier is null");
+        this.queryIdGenerator = requireNonNull(queryIdGenerator, "queryIdGenerator is null");
 
         queryPurger.scheduleWithFixedDelay(new PurgeQueriesRunnable(queries, queryManager), 200, 200, MILLISECONDS);
     }
@@ -149,7 +161,7 @@ public class StatementResource
     {
         assertRequest(!isNullOrEmpty(statement), "SQL statement is empty");
 
-        Session session = createSessionForRequest(servletRequest, sessionPropertyManager);
+        Session session = createSessionForRequest(servletRequest, accessControl, sessionPropertyManager, queryIdGenerator.createNextQueryId());
 
         ExchangeClient exchangeClient = exchangeClientSupplier.get(deltaMemoryInBytes -> { });
         Query query = new Query(session, statement, queryManager, exchangeClient);
@@ -198,6 +210,15 @@ public class StatementResource
         query.getResetSessionProperties().stream()
                 .forEach(name -> response.header(PRESTO_CLEAR_SESSION, name));
 
+        // add new transaction ID
+        query.getStartedTransactionId()
+                .ifPresent(transactionId -> response.header(PRESTO_STARTED_TRANSACTION_ID, transactionId));
+
+        // add clear transaction ID directive
+        if (query.isClearTransactionId()) {
+            response.header(PRESTO_CLEAR_TRANSACTION_ID, true);
+        }
+
         return response.build();
     }
 
@@ -241,6 +262,12 @@ public class StatementResource
         private Set<String> resetSessionProperties;
 
         @GuardedBy("this")
+        private Optional<TransactionId> startedTransactionId;
+
+        @GuardedBy("this")
+        private boolean clearTransactionId;
+
+        @GuardedBy("this")
         private Long updateCount;
 
         public Query(Session session,
@@ -248,10 +275,10 @@ public class StatementResource
                 QueryManager queryManager,
                 ExchangeClient exchangeClient)
         {
-            checkNotNull(session, "session is null");
-            checkNotNull(query, "query is null");
-            checkNotNull(queryManager, "queryManager is null");
-            checkNotNull(exchangeClient, "exchangeClient is null");
+            requireNonNull(session, "session is null");
+            requireNonNull(query, "query is null");
+            requireNonNull(queryManager, "queryManager is null");
+            requireNonNull(exchangeClient, "exchangeClient is null");
 
             this.session = session;
             this.queryManager = queryManager;
@@ -285,6 +312,16 @@ public class StatementResource
         public synchronized Set<String> getResetSessionProperties()
         {
             return resetSessionProperties;
+        }
+
+        public synchronized Optional<TransactionId> getStartedTransactionId()
+        {
+            return startedTransactionId;
+        }
+
+        public synchronized boolean isClearTransactionId()
+        {
+            return clearTransactionId;
         }
 
         public synchronized QueryResults getResults(long token, UriInfo uriInfo, Duration maxWaitTime)
@@ -334,7 +371,10 @@ public class StatementResource
                     (columns.size() == 1) && (columns.get(0).getType().equals(StandardTypes.BIGINT))) {
                 Iterator<List<Object>> iterator = data.iterator();
                 if (iterator.hasNext()) {
-                    updateCount = ((Number) iterator.next().get(0)).longValue();
+                    Number number = (Number) iterator.next().get(0);
+                    if (number != null) {
+                        updateCount = number.longValue();
+                    }
                 }
             }
 
@@ -349,7 +389,7 @@ public class StatementResource
                     exchangeClient.close();
 
                     // Return a single value for clients that require a result.
-                    columns = ImmutableList.of(new Column("result", "boolean", new ClientTypeSignature(StandardTypes.BOOLEAN, ImmutableList.<ClientTypeSignature>of(), ImmutableList.of())));
+                    columns = ImmutableList.of(new Column("result", "boolean", new ClientTypeSignature(StandardTypes.BOOLEAN, ImmutableList.of())));
                     data = ImmutableSet.<List<Object>>of(ImmutableList.<Object>of(true));
                 }
             }
@@ -363,6 +403,10 @@ public class StatementResource
             // update setSessionProperties
             setSessionProperties = queryInfo.getSetSessionProperties();
             resetSessionProperties = queryInfo.getResetSessionProperties();
+
+            // update startedTransactionId
+            startedTransactionId = queryInfo.getStartedTransactionId();
+            clearTransactionId = queryInfo.isClearTransactionId();
 
             // first time through, self is null
             QueryResults queryResults = new QueryResults(
@@ -493,9 +537,9 @@ public class StatementResource
 
         private static List<Column> createColumnsList(QueryInfo queryInfo)
         {
-            checkNotNull(queryInfo, "queryInfo is null");
+            requireNonNull(queryInfo, "queryInfo is null");
             StageInfo outputStage = queryInfo.getOutputStage();
-            checkNotNull(outputStage, "outputStage is null");
+            requireNonNull(outputStage, "outputStage is null");
 
             List<String> names = queryInfo.getFieldNames();
             List<Type> types = outputStage.getTypes();
@@ -660,8 +704,8 @@ public class StatementResource
             private RowIterable(ConnectorSession session, List<Type> types, Page page)
             {
                 this.session = session;
-                this.types = ImmutableList.copyOf(checkNotNull(types, "types is null"));
-                this.page = checkNotNull(page, "page is null");
+                this.types = ImmutableList.copyOf(requireNonNull(types, "types is null"));
+                this.page = requireNonNull(page, "page is null");
             }
 
             @Override
